@@ -1,17 +1,31 @@
 # Unity Prefab Parser MCP Server
 
-An MCP (Model Context Protocol) server that intelligently parses Unity `.prefab` files and outputs only Inspector-visible data in a clean, hierarchical YAML format, reducing token usage by 70-90%.
+An MCP (Model Context Protocol) server that intelligently parses Unity `.prefab` and `.unity` files and outputs only Inspector-visible data in a clean, hierarchical YAML format, reducing token usage by 70-90%.
+
+## Important: Usage with AI Tools
+
+> **Warning**: Do NOT use `@filename.prefab` syntax to reference Unity files in OpenCode, Cursor, or similar AI tools. This reads the raw file content and costs many tokens (10,000-50,000+ tokens for complex prefabs).
+>
+> Instead, **paste the full file path manually** and let the AI use this MCP parser tool, which provides a token-efficient parsed output (70-90% savings).
+>
+> **Example prompt:**
+> ```
+> Parse this prefab: /path/to/Project/Assets/Prefabs/MyPrefab.prefab
+> ```
+>
+> The AI will automatically use the `unity-parser_read_unity_file` MCP tool.
 
 ## Features
 
-- **Token Efficient**: Outputs clean YAML with only Inspector-visible properties
-- **GUID Resolution**: Automatically resolves asset GUIDs to human-readable names by scanning `.meta` files
-- **Hierarchy Reconstruction**: Builds the complete GameObject tree from Transform relationships
-- **Internal Reference Resolution**: Resolves fileID references to readable `<Type:GameObjectName>` format
-- **Field Filtering**: Excludes Unity internal fields (m_ObjectHideFlags, serializedVersion, etc.)
-- **Field Renaming**: Converts `m_LocalPosition` to `localPosition` for readability
-- **Configurable**: Multiple presets (minimal, standard, full, compact) and custom configuration options
-- **Compact Mode**: Optimized for LLMs with 40-50% additional token savings
+- **Token Efficient**: Outputs clean YAML with only Inspector-visible properties (70-90% reduction)
+- **Tree Hierarchy**: Visual tree format with Unicode connectors in compact mode
+- **Prefab Variant Support**: Detects variants and shows only modifications with markers (`# $`, `# +`, `# -`)
+- **GUID Resolution**: Automatically resolves asset GUIDs to human-readable names
+- **Internal Reference Resolution**: Resolves fileID references to readable `@GameObjectName` format
+- **Field Abbreviations**: Shortens field names in compact mode (`localPosition` → `lPos`)
+- **Smart Filtering**: Excludes Unity internal fields, default values, and disabled components
+- **Layer Name Mapping**: Shows layer names instead of numbers (`l: UI` instead of `layer: 5`)
+- **Configurable**: Multiple presets (minimal, standard, compact) and custom options
 
 ## Installation
 
@@ -20,11 +34,28 @@ npm install
 npm run build
 ```
 
-## Usage
+## MCP Client Setup
 
-### As MCP Server
+### OpenCode
 
-Add to your MCP client configuration:
+Add to your `opencode.json`:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "unity-parser": {
+      "type": "local",
+      "command": ["node", "/path/to/unity-prefab-parser/dist/index.js"],
+      "enabled": true
+    }
+  }
+}
+```
+
+### VS Code (with MCP extension)
+
+Add to your VS Code settings or MCP config:
 
 ```json
 {
@@ -37,9 +68,39 @@ Add to your MCP client configuration:
 }
 ```
 
-### Tool: parse_unity_prefab
+### Google Gemini / AI Studio
 
-Parse a Unity prefab file and extract Inspector-visible component data.
+For Gemini API with MCP support, configure the server:
+
+```json
+{
+  "mcpServers": {
+    "unity-prefab-parser": {
+      "command": "node",
+      "args": ["/path/to/unity-prefab-parser/dist/index.js"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "unity-prefab-parser": {
+      "command": "node",
+      "args": ["/path/to/unity-prefab-parser/dist/index.js"]
+    }
+  }
+}
+```
+
+## Tool: unity-parser_read_unity_file
+
+Parse a Unity prefab or scene file and extract Inspector-visible component data.
 
 **Input:**
 ```json
@@ -51,58 +112,38 @@ Parse a Unity prefab file and extract Inspector-visible component data.
 }
 ```
 
-**Configuration Options:**
+## Presets
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `preset` | `"minimal"` \| `"standard"` \| `"full"` \| `"compact"` | - | Use a preset configuration |
-| `resolveAssetNames` | boolean | true | Resolve GUIDs to asset names |
-| `showAssetTypes` | boolean | true | Show asset type as comment (e.g., `# MonoScript`) |
-| `arrayMaxElements` | number | 20 | Maximum array elements before summarizing |
-| `includeTransform` | boolean | true | Include Transform components |
-| `includeDisabledObjects` | boolean | true | Include disabled GameObjects |
-| `includeDefaultValues` | boolean | false | Include properties with default values |
-| `includeNullReferences` | boolean | false | Include null/empty references |
-| `componentWhitelist` | string[] | [] | Only include these component types |
-| `componentBlacklist` | string[] | [] | Exclude these component types |
-| `useBooleans` | boolean | false | Convert 0/1 to true/false for boolean fields |
-| `convertBitmasks` | boolean | false | Convert LayerMask bitmasks to layer arrays |
-| `depthSummaryMode` | boolean | false | Show `[N items]` instead of expanding at max depth |
-
-### Presets
-
-**Minimal** - Absolute minimum data:
+### Minimal
+Absolute minimum data for quick overview:
 - 5 max array elements
 - Excludes Transform component
 - No asset type comments
 - No default values or null references
 
-**Standard** (default) - Balanced:
+### Standard
+Balanced output with full details:
 - 20 max array elements
 - Full asset name resolution
 - Reference resolution enabled
-- No default values
+- Standard YAML list format for hierarchy
 
-**Full** - Maximum detail:
-- 100 max array elements
-- Includes default values
-- Includes null references
-- 10 levels of object nesting
-
-**Compact** (Recommended for LLMs) - Optimized for token efficiency:
-- All standard features plus:
-- Converts 0/1 to true/false for boolean fields
-- Converts LayerMask bitmasks to layer arrays `[26]`
-- Filters default rendering properties (dynamicOccludee, lightProbeUsage, etc.)
-- Removes redundant script names when they match component name
-- Omits empty Unity events and staticBatchInfo
-- Shows `[N items]` or `[Name1, Name2, ...]` for deep nested arrays
-- No asset type comments
-- **40-50% additional token savings** vs standard mode
+### Compact (Recommended)
+Optimized for LLMs with maximum token savings:
+- Tree hierarchy with Unicode connectors
+- Field name abbreviations (`localPosition` → `lPos`)
+- Inline metadata for non-default values
+- Boolean conversion (`1` → `true`)
+- LayerMask bitmasks to layer arrays
+- Omits default transforms, enabled states, offsets
+- Short reference syntax (`@GameObjectName`)
+- **40-50% additional savings** vs standard mode
 
 ## Example Output
 
-**Before (Raw Prefab - ~25,000 tokens):**
+### Regular Prefab (Compact Mode)
+
+**Before (Raw Unity YAML - ~25,000 tokens):**
 ```yaml
 --- !u!114 &5264680121762722832
 MonoBehaviour:
@@ -112,82 +153,139 @@ MonoBehaviour:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 5765943547154460588}
   m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e8722e45f56965a46a5e9e7f22785a7a, type: 3}
-  version: 1073741824
   ...
 ```
 
-**After (Standard Mode - ~4,000 tokens):**
+**After (Compact Mode - ~2,000 tokens):**
 ```yaml
 prefab_name: BatPF
 
-hierarchy:
-  - name: BatPF
-    layer: 28
-    tag: Player
-    children:
-      - name: Geometry
-      - name: Data
+hierarchy: |
+  BatPF (t: Player, l: Layer28)
+  ├── Data
+  ├── AI State
+  └── View
+      ├── Geometry
+      └── Shadow (a: false)
 
 components:
   BatPF:
-    Transform:
-      localPosition: {x: 27.13, y: -6.38, z: 0}
-    Rigidbody2D:
-      mass: 3
-      gravityScale: 0
-    CircleCollider2D:
-      radius: 0.5
-      isTrigger: 1
-    Character:
-      script: Character  # MonoScript
-      CharacterType: 1
-      UseDefaultMecanim: 1
-      
-  Geometry:
-    SpriteRenderer:
-      sprite: bat_sprite_0  # Sprite
-      sortingOrder: 0
-    Animator:
-      controller: BatAnimator  # RuntimeAnimatorController
-```
-
-**After (Compact Mode - ~2,000-2,500 tokens):**
-```yaml
-prefab_name: BatPF
-
-hierarchy:
-  - name: BatPF
-    layer: 28
-    tag: Player
-    children:
-      - name: Geometry
-      - name: Data
-
-components:
-  BatPF:
-    Transform:
-      localPosition: {x: 27.13, y: -6.38, z: 0}
-    Rigidbody2D:
-      mass: 3
-    CircleCollider2D:
-      radius: 0.5
-      isTrigger: true
+    CircleCollider2D: {trigger: true, radius: 0.75}
+    Rigidbody2D: {mass: 3}
     Character:
       CharacterType: 1
       UseDefaultMecanim: true
-      
-  Geometry:
+  View:
     SpriteRenderer:
-      sprite: bat_sprite_0
-    Animator:
-      controller: BatAnimator
+      sprite: @bat_sprite_0
+      sOrder: 5
 ```
 
-**Token savings:**
-- Standard mode: ~80% reduction (25K → 4K tokens)
-- Compact mode: ~90% reduction (25K → 2-2.5K tokens)
+**Token savings: ~92% reduction** (25K → 2K tokens)
+
+### Prefab Variant (Compact Mode)
+
+Variants show only modifications from the base prefab:
+
+```yaml
+prefab_name: Interactable Animal
+variant_of: Base Animal
+
+hierarchy: |
+  Base Animal  # $
+  ├── View  # $ +
+  └── NewChild  # +
+
+components:
+  Base Animal:
+    Transform:  # $
+      lPos: (0, 0.14, 0)  # $
+  View:
+    SpriteRenderer:  # $
+      color: rgba(1, 0, 0, 1)  # $
+    BoxCollider2D:  # +
+      trigger: true
+      size: (1, 1)
+    # CircleCollider2D  # -
+```
+
+**Variant Markers:**
+| Marker | Meaning |
+|--------|---------|
+| `# $` | Modified (property changed from base) |
+| `# +` | Added (new GameObject or component) |
+| `# -` | Removed (component removed from base) |
+
+## Tree Hierarchy Format
+
+In compact mode, the hierarchy uses a visual tree format:
+
+```yaml
+hierarchy: |
+  RootObject (t: Player, l: UI)
+  ├── Child1
+  ├── Child2 (a: false)
+  │   ├── GrandChild1
+  │   └── GrandChild2
+  └── Child3
+```
+
+**Inline Metadata** (only shown when non-default):
+- `t: TagName` - GameObject tag (omitted if "Untagged")
+- `l: LayerName` - Layer name (omitted if "Default")
+- `a: false` - Active state (omitted if true)
+
+**Unity Layer Names:**
+| Layer | Name |
+|-------|------|
+| 0 | Default |
+| 1 | TransparentFX |
+| 2 | Ignore Raycast |
+| 4 | Water |
+| 5 | UI |
+| 8+ | Layer{N} |
+
+## Configuration Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `preset` | `"minimal"` \| `"standard"` \| `"compact"` | - | Use a preset configuration |
+| `resolveAssetNames` | boolean | true | Resolve GUIDs to asset names |
+| `showAssetTypes` | boolean | true | Show asset type as comment |
+| `arrayMaxElements` | number | 20 | Maximum array elements before summarizing |
+| `nestedObjectDepth` | number | 4 | Maximum depth for nested objects |
+| `includeTransform` | boolean | true | Include Transform components |
+| `includeDisabledObjects` | boolean | true | Include disabled GameObjects |
+| `includeDefaultValues` | boolean | false | Include properties with default values |
+| `includeNullReferences` | boolean | false | Include null/empty references |
+| `includeHierarchy` | boolean | true | Include hierarchy section |
+| `componentWhitelist` | string[] | [] | Only include these component types |
+| `componentBlacklist` | string[] | [] | Exclude these component types |
+| `useBooleans` | boolean | false | Convert 0/1 to true/false |
+| `convertBitmasks` | boolean | false | Convert LayerMask to layer arrays |
+| `useTreeHierarchy` | boolean | false | Use tree format for hierarchy |
+| `abbreviateFieldNames` | boolean | false | Shorten field names (lPos, lRot, etc.) |
+| `omitDefaultTransforms` | boolean | false | Omit default position/rotation/scale |
+| `useShortRefs` | boolean | false | Use `@Name` instead of `<Type:Name>` |
+| `useParenVectors` | boolean | false | Use `(x, y, z)` instead of `{x, y, z}` |
+| `inlineSimpleComponents` | boolean | false | Inline components with 1-2 fields |
+| `showVariantMarkers` | boolean | true | Show `# $`, `# +`, `# -` markers |
+
+## Compact Mode Optimizations
+
+| Optimization | Before | After |
+|--------------|--------|-------|
+| Tree hierarchy | YAML list | Visual tree with `├──` `└──` |
+| Field abbreviations | `localPosition` | `lPos` |
+| Vector notation | `{x: 1, y: 2, z: 3}` | `(1, 2, 3)` |
+| Color notation | `{r: 1, g: 0, b: 0, a: 1}` | `rgba(1, 0, 0, 1)` |
+| Boolean conversion | `enabled: 1` | `enabled: true` |
+| Bitmask to layers | `{m_Bits: 67108864}` | `[26]` |
+| Reference syntax | `<GameObject:Player>` | `@Player` |
+| Default transforms | `lPos: (0, 0, 0)` | *(omitted)* |
+| Enabled true | `enabled: true` | *(omitted)* |
+| Empty events | `{m_PersistentCalls: ...}` | `[]` |
+| Simple components | Multi-line | `{field: value}` |
 
 ## Project Structure
 
@@ -201,15 +299,10 @@ unity-prefab-parser/
 │   ├── hierarchy.ts    # GameObject tree builder
 │   ├── formatter.ts    # YAML output formatter
 │   ├── config.ts       # Configuration system
-│   └── cache.ts        # Meta file cache
+│   ├── cache.ts        # Meta file cache
+│   └── variant.ts      # Prefab variant detection
 ├── test/
-│   ├── fixtures/       # Sample prefab files
-│   └── parser.test.ts  # Test suite
-├── presets/
-│   ├── minimal.json
-│   ├── standard.json
-│   ├── full.json
-│   └── compact.json
+│   └── parser.test.ts  # Test suite (96 tests)
 ├── package.json
 └── tsconfig.json
 ```
@@ -217,36 +310,22 @@ unity-prefab-parser/
 ## How It Works
 
 1. **Parse Unity YAML**: Handles Unity's custom YAML format with `!u!` tags
-2. **Build FileID Map**: Creates lookup tables for GameObjects, Transforms, and Components
-3. **Auto-detect Project Root**: Finds the Unity project root by looking for `Assets/` folder
-4. **Build GUID Cache**: Scans all `.meta` files to create GUID → asset name mapping
-5. **Reconstruct Hierarchy**: Builds the GameObject tree from Transform parent/child relationships
-6. **Filter & Rename Fields**: Applies component-specific field filters and renames
-7. **Resolve References**: Converts fileIDs and GUIDs to readable names
-8. **Apply Compact Optimizations**: Boolean conversion, bitmask handling, etc. (if enabled)
-9. **Format Output**: Generates clean YAML grouped by GameObject
-
-## Compact Mode Optimizations
-
-When using `preset: 'compact'`, the following optimizations are applied:
-
-| Optimization | Example |
-|--------------|---------|
-| Boolean conversion | `enabled: 1` → `enabled: true` |
-| Bitmask to layers | `{m_Bits: 67108864}` → `[26]` |
-| Default rendering props | Removes `dynamicOccludee: 1`, etc. |
-| Redundant script names | Removes `script: Character` when component is `Character:` |
-| Empty events | Removes `{m_PersistentCalls: {m_Calls: []}}` |
-| Empty staticBatchInfo | Removes `{firstSubMesh: 0, subMeshCount: 0}` |
-| Depth summaries | Deep arrays show `[7 items]` or `[Idle, Patrol, ...]` |
-| No type comments | `sprite: bat_sprite_0` (no `# Sprite`) |
+2. **Detect Prefab Type**: Identifies regular prefabs vs variants
+3. **Build FileID Map**: Creates lookup tables for GameObjects, Transforms, and Components
+4. **Auto-detect Project Root**: Finds Unity project root by looking for `Assets/` folder
+5. **Build GUID Cache**: Scans `.meta` files to create GUID → asset name mapping
+6. **Reconstruct Hierarchy**: Builds GameObject tree from Transform relationships
+7. **Filter & Rename Fields**: Applies component-specific filters and abbreviations
+8. **Resolve References**: Converts fileIDs and GUIDs to readable names
+9. **Extract Variant Modifications**: For variants, extract only changed properties
+10. **Format Output**: Generates clean YAML with tree hierarchy and markers
 
 ## Supported Components
 
 Built-in field filters for:
 - Transform, RectTransform
 - Rigidbody, Rigidbody2D
-- All Collider types (Box, Sphere, Capsule, Circle, Polygon, Mesh, etc.)
+- All Collider types (Box, Sphere, Capsule, Circle, Polygon, etc.)
 - SpriteRenderer, MeshRenderer, SkinnedMeshRenderer
 - Animator, Animation
 - AudioSource, Camera, Light
@@ -267,7 +346,7 @@ npm run build
 # Run tests
 npm test
 
-# Run in development mode
+# Watch mode
 npm run dev
 ```
 
