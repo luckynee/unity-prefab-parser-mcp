@@ -1,0 +1,9 @@
+{
+  "arrayMaxElements": 20,
+  "resolveAssetNames": true,
+  "resolveReferences": true,
+  "includeDefaultValues": false,
+  "includeNullReferences": false,
+  "showAssetTypes": true,
+  "nestedObjectDepth": 4
+}

@@ -1,0 +1,8 @@
+{
+  "arrayMaxElements": 5,
+  "includeDefaultValues": false,
+  "includeNullReferences": false,
+  "componentBlacklist": ["Transform"],
+  "showAssetTypes": false,
+  "nestedObjectDepth": 3
+}

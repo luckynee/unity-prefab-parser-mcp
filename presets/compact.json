@@ -1,0 +1,16 @@
+{
+  "resolveAssetNames": true,
+  "showAssetTypes": false,
+  "arrayMaxElements": 20,
+  "nestedObjectDepth": 3,
+  "includeDefaultValues": false,
+  "includeNullReferences": false,
+  "includeUnityInternals": false,
+  "simplifyUnityEvents": true,
+  "convertBitmasks": true,
+  "removeRedundantScriptNames": true,
+  "omitEmptyStaticBatch": true,
+  "useBooleans": true,
+  "depthSummaryMode": true,
+  "filterDefaultRenderingProps": true
+}
