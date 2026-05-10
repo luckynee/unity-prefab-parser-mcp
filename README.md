@@ -1,6 +1,6 @@
 # Unity Prefab Parser MCP Server
 
-An MCP (Model Context Protocol) server that intelligently parses Unity `.prefab` and `.unity` files and outputs only Inspector-visible data in a clean, hierarchical YAML format, reducing token usage by 70-90%.
+An MCP (Model Context Protocol) server that parses Unity **text-serialized** `.prefab`, `.unity`, and `.asset` files and outputs only Inspector-visible data in a clean, hierarchical YAML format, reducing token usage by 70-90%.
 
 ## Important: Usage with AI Tools
 
@@ -13,7 +13,16 @@ An MCP (Model Context Protocol) server that intelligently parses Unity `.prefab`
 > Parse this prefab: /path/to/Project/Assets/Prefabs/MyPrefab.prefab
 > ```
 >
-> The AI will automatically use the `unity-parser_read_unity_file` MCP tool.
+> The AI will automatically use the `parse_unity_file` MCP tool.
+
+## Unity serialization requirement
+
+This server works on Unity's **text serialization** format (`UnityYAML`). If a file is stored in **binary** form, the server will reject it and tell you to switch Unity to **Force Text**.
+
+- Unity setting: **Edit > Project Settings > Editor > Asset Serialization > Mode = Force Text**
+- Official docs:
+  - https://docs.unity3d.com/Manual/class-EditorManager.html
+  - https://docs.unity3d.com/Manual/UnityYAML.html
 
 ## Features
 
@@ -98,19 +107,21 @@ Add to your `claude_desktop_config.json`:
 }
 ```
 
-## Tool: unity-parser_read_unity_file
+## Tool: parse_unity_file
 
-Parse a Unity prefab or scene file and extract Inspector-visible component data.
+Parse a Unity text-serialized prefab, scene, or asset file and extract Inspector-visible component data.
 
 **Input:**
 ```json
 {
-  "filePath": "/path/to/your/prefab.prefab",
+  "filePath": "/path/to/your/file.prefab",
   "config": {
     "preset": "compact"
   }
 }
 ```
+
+> Backward compatibility: the deprecated alias `parse_unity_prefab` is still registered for older clients.
 
 ## Presets
 

@@ -13,7 +13,7 @@ import * as path from 'path';
 import { loadConfig, type ParseConfig, type ParsedPrefab, type FileIdMap, type MetaFileCache, type HierarchyNode } from './config.js';
 import { parseUnityYAML, type ParsedDocument } from './parser.js';
 import { findProjectRootAsync, buildAssetCache } from './cache.js';
-import { buildFileIdMap, buildHierarchy, getComponentsByGameObject } from './hierarchy.js';
+import { buildFileIdMap, buildGameObjectDisplayMap, buildHierarchy, getComponentInfo } from './hierarchy.js';
 import { resolveReferences, extractScriptName, resolveReference } from './resolver.js';
 import { FIELD_ABBREVIATIONS, isDefaultTransformValue } from './components.js';
 import { formatYAMLWithComments } from './formatter.js';
@@ -31,8 +31,8 @@ import {
  */
 async function parsePrefab(filePath: string, config: ParseConfig): Promise<string> {
   // 1. Validate file path
-  if (!filePath.endsWith('.prefab') && !filePath.endsWith('.unity')) {
-    throw new Error('File must be a .prefab or .unity file');
+  if (!filePath.endsWith('.prefab') && !filePath.endsWith('.unity') && !filePath.endsWith('.asset')) {
+    throw new Error('File must be a .prefab, .unity, or .asset file');
   }
   
   // 2. Auto-detect Unity project root
@@ -59,13 +59,13 @@ async function parsePrefab(filePath: string, config: ParseConfig): Promise<strin
   
   // 7. Reconstruct GameObject hierarchy
   const hierarchy = buildHierarchy(fileIdMap, config.includeDisabledObjects);
-  
-  // 8. Extract and filter components (ordered by hierarchy)
-  const components = extractComponents(documents, fileIdMap, assetCache, config, hierarchy);
-  
-  // 9. Format as YAML
+  const displayMap = buildGameObjectDisplayMap(hierarchy);
   const prefabName = path.basename(filePath, path.extname(filePath));
   
+  // 8. Extract and filter components (ordered by hierarchy)
+  const components = extractComponents(documents, fileIdMap, assetCache, config, hierarchy, displayMap, prefabName);
+  
+  // 9. Format as YAML
   const parsedPrefab: ParsedPrefab = {
     prefab_name: prefabName,
     hierarchy,
@@ -77,25 +77,25 @@ async function parsePrefab(filePath: string, config: ParseConfig): Promise<strin
     parsedPrefab.variant_of = variantInfo.basePrefabName;
     
     // Process modifications from all prefab instances
-    const allModifications = processVariantModifications(variantInfo, assetCache, config);
+    const allModifications = processVariantModifications(variantInfo, fileIdMap, assetCache, config, displayMap);
     if (Object.keys(allModifications).length > 0) {
       parsedPrefab.modifications = allModifications;
     }
     
     // Process added components
-    const addedComponents = processAddedComponents(variantInfo, documents, fileIdMap, assetCache, config);
+    const addedComponents = processAddedComponents(variantInfo, documents, fileIdMap, assetCache, config, displayMap);
     if (Object.keys(addedComponents).length > 0) {
       parsedPrefab.added_components = addedComponents;
     }
     
     // Process added GameObjects
-    const addedGameObjects = processAddedGameObjects(variantInfo, fileIdMap);
+    const addedGameObjects = processAddedGameObjects(variantInfo, fileIdMap, displayMap);
     if (addedGameObjects.length > 0) {
       parsedPrefab.added_gameobjects = addedGameObjects;
     }
     
     // Process removed components
-    const removedComponents = processRemovedComponents(variantInfo, assetCache);
+    const removedComponents = processRemovedComponents(variantInfo, fileIdMap, assetCache, displayMap);
     if (removedComponents.length > 0) {
       parsedPrefab.removed_components = removedComponents;
     }
@@ -121,18 +121,17 @@ const VARIANT_EXCLUDE_FIELDS = [
 
 /**
  * Process variant modifications into a structured format
- * Groups all modifications under the base prefab name only
+ * Preserves target GameObject/component identity for variant changes
  */
 function processVariantModifications(
   variantInfo: PrefabVariantInfo,
+  fileIdMap: FileIdMap,
   assetCache: MetaFileCache,
-  config: ParseConfig
+  config: ParseConfig,
+  displayMap: Map<string, string>
 ): Record<string, Record<string, Record<string, unknown>>> {
   const result: Record<string, Record<string, Record<string, unknown>>> = {};
-  
-  // Use only the base prefab name for grouping all modifications
-  const groupKey = variantInfo.basePrefabName || 'Unknown';
-  
+
   for (const instance of variantInfo.prefabInstances) {
     // Filter out internal modifications
     const filtered = filterInternalModifications(instance.modifications);
@@ -142,8 +141,11 @@ function processVariantModifications(
     
     // Process all modifications under the base prefab name
     for (const [targetKey, properties] of merged) {
-      if (!result[groupKey]) {
-        result[groupKey] = {};
+      const targetFileId = targetKey.includes(':') ? targetKey.split(':').pop() || '' : targetKey;
+      const targetInfo = getVariantTargetInfo(targetFileId, fileIdMap, displayMap, variantInfo.basePrefabName);
+
+      if (!result[targetInfo.gameObjectKey]) {
+        result[targetInfo.gameObjectKey] = {};
       }
       
       // Group properties by component type (inferred from property path)
@@ -152,10 +154,10 @@ function processVariantModifications(
         if (value === null || value === undefined || value === '') continue;
         
         // Try to determine component type from property path
-        const componentType = inferComponentType(propPath);
+        const componentType = targetInfo.componentType || inferComponentType(propPath);
         
-        if (!result[groupKey][componentType]) {
-          result[groupKey][componentType] = {};
+        if (!result[targetInfo.gameObjectKey][componentType]) {
+          result[targetInfo.gameObjectKey][componentType] = {};
         }
         
         // Get readable field name and apply abbreviations if in compact mode
@@ -180,7 +182,7 @@ function processVariantModifications(
         // Skip default values (position 0,0,0 / rotation 0,0,0,1 / scale 1,1,1)
         if (isDefaultTransformValue(fieldName, formattedValue)) continue;
         
-        result[groupKey][componentType][fieldName] = formattedValue;
+        result[targetInfo.gameObjectKey][componentType][fieldName] = formattedValue;
       }
     }
   }
@@ -287,7 +289,8 @@ function processAddedComponents(
   documents: ParsedDocument[],
   fileIdMap: FileIdMap,
   assetCache: MetaFileCache,
-  config: ParseConfig
+  config: ParseConfig,
+  displayMap: Map<string, string>
 ): Record<string, Record<string, unknown>> {
   const result: Record<string, Record<string, unknown>> = {};
   
@@ -300,7 +303,9 @@ function processAddedComponents(
       // Get the target GameObject name
       const component = fileIdMap.components.get(added.componentFileId);
       const gameObject = component ? fileIdMap.gameObjects.get(component.gameObjectFileId) : null;
-      const goName = gameObject?.name || 'Unknown';
+      const goName = gameObject
+        ? getDisplayName(gameObject.name, component?.gameObjectFileId || '', displayMap)
+        : 'Unknown';
       
       if (!result[goName]) {
         result[goName] = {};
@@ -330,7 +335,8 @@ function processAddedComponents(
  */
 function processAddedGameObjects(
   variantInfo: PrefabVariantInfo,
-  fileIdMap: FileIdMap
+  fileIdMap: FileIdMap,
+  displayMap: Map<string, string>
 ): Array<{ name: string; parent?: string }> {
   const result: Array<{ name: string; parent?: string }> = [];
   
@@ -350,13 +356,15 @@ function processAddedGameObjects(
           const parentTransform = fileIdMap.transforms.get(transformData.parentFileId);
           if (parentTransform) {
             const parentGO = fileIdMap.gameObjects.get(parentTransform.gameObjectFileId);
-            parentName = parentGO?.name;
+            parentName = parentGO
+              ? getDisplayName(parentGO.name, parentTransform.gameObjectFileId, displayMap)
+              : undefined;
           }
         }
       }
       
       result.push({
-        name: gameObject.name,
+        name: getDisplayName(gameObject.name, added.gameObjectFileId, displayMap),
         parent: parentName,
       });
     }
@@ -370,18 +378,27 @@ function processAddedGameObjects(
  */
 function processRemovedComponents(
   variantInfo: PrefabVariantInfo,
-  assetCache: MetaFileCache
+  fileIdMap: FileIdMap,
+  assetCache: MetaFileCache,
+  displayMap: Map<string, string>
 ): string[] {
   const result: string[] = [];
   
   for (const instance of variantInfo.prefabInstances) {
     for (const removed of instance.removedComponents) {
-      // Format: "SourcePrefab:FileId" or resolve to component name if possible
-      const prefabName = removed.targetGuid 
-        ? (assetCache[removed.targetGuid]?.name || 'Unknown')
-        : 'Unknown';
-      
-      result.push(`${prefabName}:${removed.targetFileId}`);
+      const componentInfo = getComponentInfo(removed.targetFileId, fileIdMap);
+      if (componentInfo) {
+        const ownerFileId = getOwningGameObjectFileId(removed.targetFileId, fileIdMap);
+        const goName = getDisplayName(componentInfo.gameObjectName, ownerFileId, displayMap);
+        result.push(`${goName}.${componentInfo.type}`);
+        continue;
+      }
+
+      const prefabName = removed.targetGuid
+        ? (assetCache[removed.targetGuid]?.name || variantInfo.basePrefabName || 'Unknown')
+        : (variantInfo.basePrefabName || 'Unknown');
+
+      result.push(`${prefabName}.${removed.targetFileId}`);
     }
   }
   
@@ -391,11 +408,11 @@ function processRemovedComponents(
 /**
  * Get GameObject names in hierarchy traversal order (depth-first)
  */
-function getHierarchyOrder(nodes: HierarchyNode[]): string[] {
+function getHierarchyOrder(nodes: HierarchyNode[], displayMap: Map<string, string>): string[] {
   const order: string[] = [];
   
   function traverse(node: HierarchyNode): void {
-    order.push(node.name);
+    order.push(node.fileId ? getDisplayName(node.name, node.fileId, displayMap) : node.name);
     if (node.children) {
       for (const child of node.children) {
         traverse(child);
@@ -419,13 +436,14 @@ function extractComponents(
   fileIdMap: FileIdMap,
   assetCache: MetaFileCache,
   config: ParseConfig,
-  hierarchy: HierarchyNode[]
+  hierarchy: HierarchyNode[],
+  displayMap: Map<string, string>,
+  rootAssetName: string
 ): Record<string, Record<string, unknown>> {
   const result: Record<string, Record<string, unknown>> = {};
-  const componentsByGO = getComponentsByGameObject(fileIdMap);
   
   // Get hierarchy traversal order for sorting
-  const hierarchyOrder = getHierarchyOrder(hierarchy);
+  const hierarchyOrder = getHierarchyOrder(hierarchy, displayMap);
   
   // Process transforms
   for (const doc of documents) {
@@ -448,7 +466,7 @@ function extractComponents(
       const gameObject = fileIdMap.gameObjects.get(transform.gameObjectFileId);
       if (!gameObject) continue;
       
-      const goName = gameObject.name;
+      const goName = getDisplayName(gameObject.name, transform.gameObjectFileId, displayMap);
       
       if (!result[goName]) {
         result[goName] = {};
@@ -465,6 +483,40 @@ function extractComponents(
       if (Object.keys(resolvedData).length > 0) {
         result[goName][doc.className] = resolvedData;
       }
+    }
+  }
+
+  if (Object.keys(result).length === 0 && hierarchy.length === 0) {
+    const assetComponents: Record<string, unknown> = {};
+
+    for (const doc of documents) {
+      if (['PrefabInstance', 'PrefabModification'].includes(doc.className)) {
+        continue;
+      }
+
+      if (config.componentBlacklist.length > 0 && config.componentBlacklist.includes(doc.className)) {
+        continue;
+      }
+      if (config.componentWhitelist.length > 0 && !config.componentWhitelist.includes(doc.className)) {
+        continue;
+      }
+
+      let componentDisplayName = doc.className;
+      if (doc.className === 'MonoBehaviour') {
+        const scriptRef = doc.data.m_Script as Record<string, unknown> | undefined;
+        if (scriptRef?.guid) {
+          componentDisplayName = extractScriptName(scriptRef, assetCache, config).split('  #')[0];
+        }
+      }
+
+      const resolvedData = resolveReferences(doc.data, doc.className, fileIdMap, assetCache, config);
+      if (Object.keys(resolvedData).length > 0) {
+        assetComponents[componentDisplayName] = resolvedData;
+      }
+    }
+
+    if (Object.keys(assetComponents).length > 0) {
+      result[rootAssetName] = assetComponents;
     }
   }
   
@@ -494,7 +546,7 @@ function extractComponents(
       continue;
     }
     
-    const goName = gameObject.name;
+    const goName = getDisplayName(gameObject.name, component.gameObjectFileId, displayMap);
     
     if (!result[goName]) {
       result[goName] = {};
@@ -604,8 +656,8 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: 'parse_unity_prefab',
-      description: `Parse Unity prefab file and extract Inspector-visible component data in YAML format.
+      name: 'parse_unity_file',
+      description: `Parse a Unity text-serialized prefab, scene, or asset file and extract Inspector-visible component data in YAML format.
 Automatically resolves asset names from GUIDs by scanning the project's .meta files.
 Outputs a clean, hierarchical structure showing the GameObject tree and all component data.
 
@@ -642,7 +694,7 @@ Features:
         properties: {
           filePath: {
             type: 'string',
-            description: 'Absolute path to the .prefab file',
+            description: 'Absolute path to the .prefab, .unity, or .asset file',
           },
           config: {
             type: 'object',
@@ -697,12 +749,30 @@ Features:
         required: ['filePath'],
       },
     },
+    {
+      name: 'parse_unity_prefab',
+      description: 'Deprecated alias for parse_unity_file. Use parse_unity_file for new clients.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          filePath: {
+            type: 'string',
+            description: 'Absolute path to the .prefab, .unity, or .asset file',
+          },
+          config: {
+            type: 'object',
+            description: 'Optional configuration (uses "standard" preset if omitted)',
+          },
+        },
+        required: ['filePath'],
+      },
+    },
   ],
 }));
 
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  if (request.params.name === 'parse_unity_prefab') {
+  if (request.params.name === 'parse_unity_prefab' || request.params.name === 'parse_unity_file') {
     const args = request.params.arguments as {
       filePath: string;
       config?: Partial<ParseConfig>;
@@ -735,6 +805,53 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   
   throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
 });
+
+function getDisplayName(name: string, fileId: string, displayMap: Map<string, string>): string {
+  return displayMap.get(fileId) || name;
+}
+
+function getVariantTargetInfo(
+  targetFileId: string,
+  fileIdMap: FileIdMap,
+  displayMap: Map<string, string>,
+  fallbackName: string
+): { gameObjectKey: string; componentType?: string } {
+  if (fileIdMap.gameObjects.has(targetFileId)) {
+    const gameObject = fileIdMap.gameObjects.get(targetFileId)!;
+    return {
+      gameObjectKey: getDisplayName(gameObject.name, targetFileId, displayMap),
+      componentType: 'GameObject',
+    };
+  }
+
+  const componentInfo = getComponentInfo(targetFileId, fileIdMap);
+  if (componentInfo) {
+    const ownerFileId = getOwningGameObjectFileId(targetFileId, fileIdMap);
+
+    return {
+      gameObjectKey: getDisplayName(componentInfo.gameObjectName, ownerFileId, displayMap),
+      componentType: componentInfo.type,
+    };
+  }
+
+  return {
+    gameObjectKey: fallbackName || 'Unknown',
+  };
+}
+
+function getOwningGameObjectFileId(targetFileId: string, fileIdMap: FileIdMap): string {
+  const component = fileIdMap.components.get(targetFileId);
+  if (component) {
+    return component.gameObjectFileId;
+  }
+
+  const transform = fileIdMap.transforms.get(targetFileId);
+  if (transform) {
+    return transform.gameObjectFileId;
+  }
+
+  return targetFileId;
+}
 
 // Start the server
 async function main() {

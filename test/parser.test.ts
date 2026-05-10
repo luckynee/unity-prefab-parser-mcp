@@ -1,10 +1,12 @@
 import { test, describe } from 'node:test';
 import * as assert from 'node:assert';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 import { parseUnityYAML, parseUnityYAMLContent } from '../src/parser.js';
-import { buildFileIdMap, buildHierarchy, findRootTransforms } from '../src/hierarchy.js';
+import { buildFileIdMap, buildGameObjectDisplayMap, buildHierarchy, findRootTransforms } from '../src/hierarchy.js';
 import { loadConfig } from '../src/config.js';
 import { shouldExcludeField, renameField, isBooleanField, isDefaultOffset } from '../src/components.js';
 import { resolveReferences, simplifyUnityEvent } from '../src/resolver.js';
@@ -52,6 +54,36 @@ describe('Unity YAML Parser', () => {
     );
     assert.ok(characterMono, 'Should find MonoBehaviour with custom fields');
   });
+
+  test('parses multiline block scalars', () => {
+    const content = `--- !u!114 &1
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_Script: {fileID: 11500000, guid: abcdef1234567890abcdef1234567890, type: 3}
+  dialogue: |
+    Hello there
+    General Kenobi
+`;
+
+    const documents = parseUnityYAMLContent(content);
+    assert.equal(documents.length, 1, 'Should parse one document');
+    assert.equal(documents[0].data.dialogue, 'Hello there\nGeneral Kenobi\n');
+  });
+
+  test('rejects binary Unity assets', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'unity-parser-'));
+    const filePath = path.join(tempDir, 'Binary.prefab');
+
+    try {
+      await fs.writeFile(filePath, Buffer.from([0x00, 0x01, 0x02, 0x03]));
+      await assert.rejects(
+        () => parseUnityYAML(filePath),
+        /binary/i,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Hierarchy Builder', () => {
@@ -87,6 +119,42 @@ describe('Hierarchy Builder', () => {
     // Check for children
     assert.ok(hierarchy[0].children, 'Root should have children');
     assert.ok(hierarchy[0].children!.length >= 2, 'Should have at least 2 children');
+  });
+
+  test('builds stable display names for duplicate object names', () => {
+    const hierarchy = [
+      {
+        fileId: '1',
+        name: 'Root',
+        children: [
+          { fileId: '2', name: 'Child' },
+          { fileId: '3', name: 'Child' },
+        ],
+      },
+    ];
+
+    const displayMap = buildGameObjectDisplayMap(hierarchy);
+    assert.equal(displayMap.get('1'), 'Root');
+    assert.equal(displayMap.get('2'), 'Root/Child [2]');
+    assert.equal(displayMap.get('3'), 'Root/Child [3]');
+  });
+
+  test('keeps simple names when they are unique', () => {
+    const hierarchy = [
+      {
+        fileId: '1',
+        name: 'Root',
+        children: [
+          { fileId: '2', name: 'View' },
+          { fileId: '3', name: 'Shadow' },
+        ],
+      },
+    ];
+
+    const displayMap = buildGameObjectDisplayMap(hierarchy);
+    assert.equal(displayMap.get('1'), 'Root');
+    assert.equal(displayMap.get('2'), 'View');
+    assert.equal(displayMap.get('3'), 'Shadow');
   });
 });
 

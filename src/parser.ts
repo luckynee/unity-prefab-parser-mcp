@@ -1,6 +1,5 @@
 import * as fs from 'fs/promises';
-import * as path from 'path';
-import type { UnityObject } from './config.js';
+import * as YAML from 'yaml';
 
 // Unity YAML uses custom tags like !u!1, !u!4, etc.
 // These correspond to Unity class IDs
@@ -99,7 +98,15 @@ export interface ParsedDocument {
  * Each document has a tag like !u!1 &12345678 where 1 is the class ID and 12345678 is the file ID
  */
 export async function parseUnityYAML(filePath: string): Promise<ParsedDocument[]> {
-  const content = await fs.readFile(filePath, 'utf-8');
+  const buffer = await fs.readFile(filePath);
+
+  if (isBinaryContent(buffer)) {
+    throw new Error(
+      'Unity asset appears to be binary. Switch Unity Asset Serialization Mode to Force Text before parsing this file.'
+    );
+  }
+
+  const content = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
   return parseUnityYAMLContent(content);
 }
 
@@ -111,7 +118,7 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
   
   // Split into documents by the Unity document separator pattern
   // Format: --- !u!<classId> &<fileId>
-  const docRegex = /--- !u!(\d+) &(\d+)/g;
+  const docRegex = /^---\s*!u!(\d+)\s*&(-?\d+)\s*$/gm;
   const docStarts: { index: number; classId: string; fileId: string }[] = [];
   
   let match: RegExpExecArray | null;
@@ -132,7 +139,7 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
     const className = UNITY_CLASS_IDS[start.classId] || `UnknownType_${start.classId}`;
     
     try {
-      const data = parseYAMLDocument(docContent, className);
+      const data = parseYAMLDocument(docContent);
       
       documents.push({
         tag: `!u!${start.classId}`,
@@ -153,259 +160,36 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
 /**
  * Parse a single YAML document with Unity-specific handling
  */
-function parseYAMLDocument(docContent: string, className: string): Record<string, unknown> {
-  // Remove the document header line
+function parseYAMLDocument(docContent: string): Record<string, unknown> {
   const lines = docContent.split('\n');
-  const dataLines = lines.slice(1); // Skip the --- !u!X &Y line
-  
-  // Find the root key (e.g., "GameObject:", "Transform:", "MonoBehaviour:")
-  const rootKeyLine = dataLines.find(line => /^[A-Za-z_][A-Za-z0-9_]*:/.test(line));
-  
-  if (!rootKeyLine) {
+  const body = lines.slice(1).join('\n').trim();
+
+  if (!body) {
     return {};
   }
-  
-  const rootKey = rootKeyLine.replace(':', '').trim();
-  const rootIndex = dataLines.indexOf(rootKeyLine);
-  
-  // Parse the content under the root key
-  const contentLines = dataLines.slice(rootIndex + 1);
-  return parseYAMLObject(contentLines, 2);
-}
 
-/**
- * Parse YAML object from lines with given base indentation
- */
-function parseYAMLObject(lines: string[], baseIndent: number): Record<string, unknown> {
-  const result: Record<string, unknown> = {};
-  let i = 0;
-  
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trimStart();
-    
-    // Skip empty lines and comments
-    if (!trimmed || trimmed.startsWith('#')) {
-      i++;
-      continue;
-    }
-    
-    // Calculate indentation
-    const indent = line.length - trimmed.length;
-    
-    // If we've gone back to a lower indentation, we're done with this object
-    if (indent < baseIndent) {
-      break;
-    }
-    
-    // Parse key-value pair
-    const colonIndex = trimmed.indexOf(':');
-    if (colonIndex === -1) {
-      i++;
-      continue;
-    }
-    
-    const key = trimmed.substring(0, colonIndex).trim();
-    const valueStr = trimmed.substring(colonIndex + 1).trim();
-    
-    if (key.startsWith('-')) {
-      // This is an array item at the wrong level
-      i++;
-      continue;
-    }
-    
-    if (valueStr === '' || valueStr === '[]' || valueStr === '{}') {
-      // Check if this is an object/array with nested content
-      const nestedLines: string[] = [];
-      let j = i + 1;
-      
-      // Look ahead to see if the next line starts an array (same indent with -)
-      let isArrayAtSameIndent = false;
-      if (j < lines.length) {
-        const nextLine = lines[j];
-        const nextTrimmed = nextLine.trimStart();
-        const nextIndent = nextLine.length - nextTrimmed.length;
-        if (nextTrimmed.startsWith('-') && nextIndent === indent) {
-          isArrayAtSameIndent = true;
-        }
-      }
-      
-      while (j < lines.length) {
-        const nestedLine = lines[j];
-        const nestedTrimmed = nestedLine.trimStart();
-        
-        if (!nestedTrimmed || nestedTrimmed.startsWith('#')) {
-          j++;
-          continue;
-        }
-        
-        const nestedIndent = nestedLine.length - nestedTrimmed.length;
-        
-        // For arrays at same indent level, check if we hit a non-array-item line
-        if (isArrayAtSameIndent) {
-          // Stop if we hit a line at same indent that isn't an array item
-          if (nestedIndent === indent && !nestedTrimmed.startsWith('-')) {
-            break;
-          }
-          // Stop if we go to a lower indent
-          if (nestedIndent < indent) {
-            break;
-          }
-        } else {
-          // Normal case: nested content must be more indented
-          if (nestedIndent <= indent) {
-            break;
-          }
-        }
-        
-        nestedLines.push(nestedLine);
-        j++;
-      }
-      
-      if (nestedLines.length > 0) {
-        const firstNested = nestedLines[0].trimStart();
-        if (firstNested.startsWith('-')) {
-          // This is an array - use the actual indent of the array items
-          result[key] = parseYAMLArray(nestedLines, indent);
-        } else {
-          // This is an object
-          result[key] = parseYAMLObject(nestedLines, indent + 2);
-        }
-      } else {
-        result[key] = valueStr === '[]' ? [] : (valueStr === '{}' ? {} : null);
-      }
-      
-      i = j;
-    } else {
-      // Simple value
-      result[key] = parseYAMLValue(valueStr);
-      i++;
-    }
-  }
-  
-  return result;
-}
+  const normalizedBody = normalizeUnityYaml(body);
+  const document = YAML.parseDocument(normalizedBody, {
+    prettyErrors: true,
+    uniqueKeys: false,
+  });
 
-/**
- * Parse YAML array from lines
- */
-function parseYAMLArray(lines: string[], baseIndent: number): unknown[] {
-  const result: unknown[] = [];
-  let i = 0;
-  
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trimStart();
-    
-    if (!trimmed || trimmed.startsWith('#')) {
-      i++;
-      continue;
-    }
-    
-    const indent = line.length - trimmed.length;
-    
-    if (indent < baseIndent) {
-      break;
-    }
-    
-    if (trimmed.startsWith('- ')) {
-      const value = trimmed.substring(2);
-      
-      // Check if this is an inline object like {fileID: 123}
-      if (value.startsWith('{') && value.endsWith('}')) {
-        // Parse as inline object value
-        result.push(parseYAMLValue(value));
-        i++;
-        continue;
-      }
-      
-      // Check if this is an inline array like [1, 2, 3]
-      if (value.startsWith('[') && value.endsWith(']')) {
-        result.push(parseYAMLValue(value));
-        i++;
-        continue;
-      }
-      
-      // Check if this is a key:value object item
-      if (value.includes(':')) {
-        // Parse inline object or complex nested object
-        const colonIndex = value.indexOf(':');
-        const key = value.substring(0, colonIndex).trim();
-        const valueStr = value.substring(colonIndex + 1).trim();
-        
-        // Collect nested lines for this array item
-        const nestedLines: string[] = [];
-        let j = i + 1;
-        
-        while (j < lines.length) {
-          const nestedLine = lines[j];
-          const nestedTrimmed = nestedLine.trimStart();
-          
-          if (!nestedTrimmed) {
-            j++;
-            continue;
-          }
-          
-          const nestedIndent = nestedLine.length - nestedTrimmed.length;
-          
-          if (nestedIndent <= indent) {
-            break;
-          }
-          
-          nestedLines.push(nestedLine);
-          j++;
-        }
-        
-        const obj: Record<string, unknown> = {};
-        obj[key] = valueStr ? parseYAMLValue(valueStr) : null;
-        
-        if (nestedLines.length > 0) {
-          const nestedObj = parseYAMLObject(nestedLines, indent + 2);
-          Object.assign(obj, nestedObj);
-        }
-        
-        result.push(obj);
-        i = j;
-      } else {
-        // Simple value
-        result.push(parseYAMLValue(value));
-        i++;
-      }
-    } else if (trimmed.startsWith('-')) {
-      // Just a dash, likely an object follows
-      const nestedLines: string[] = [];
-      let j = i + 1;
-      
-      while (j < lines.length) {
-        const nestedLine = lines[j];
-        const nestedTrimmed = nestedLine.trimStart();
-        
-        if (!nestedTrimmed) {
-          j++;
-          continue;
-        }
-        
-        const nestedIndent = nestedLine.length - nestedTrimmed.length;
-        
-        if (nestedIndent <= indent) {
-          break;
-        }
-        
-        nestedLines.push(nestedLine);
-        j++;
-      }
-      
-      if (nestedLines.length > 0) {
-        result.push(parseYAMLObject(nestedLines, indent + 2));
-      }
-      
-      i = j;
-    } else {
-      i++;
-    }
+  if (document.errors.length > 0) {
+    throw document.errors[0];
   }
-  
-  return result;
+
+  const parsed = document.toJS({ maxAliasCount: -1 });
+  if (!parsed || typeof parsed !== 'object') {
+    return {};
+  }
+
+  const rootEntries = Object.entries(parsed as Record<string, unknown>);
+  if (rootEntries.length === 0) {
+    return {};
+  }
+
+  const [, value] = rootEntries[0];
+  return normalizeParsedValue(value) as Record<string, unknown>;
 }
 
 /**
@@ -468,6 +252,43 @@ function parseYAMLValue(value: string): unknown {
   
   // Default: return as string
   return value;
+}
+
+function normalizeUnityYaml(content: string): string {
+  return content.replace(/(fileID:\s*)(-?\d+)/g, '$1"$2"');
+}
+
+function normalizeParsedValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => normalizeParsedValue(item));
+  }
+
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const normalized: Record<string, unknown> = {};
+
+    for (const [key, entry] of Object.entries(obj)) {
+      if (key === 'fileID' && typeof entry === 'number') {
+        normalized[key] = String(entry);
+      } else {
+        normalized[key] = normalizeParsedValue(entry);
+      }
+    }
+
+    return normalized;
+  }
+
+  return value;
+}
+
+function isBinaryContent(buffer: Buffer): boolean {
+  for (const byte of buffer) {
+    if (byte === 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**

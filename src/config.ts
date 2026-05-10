@@ -128,6 +128,7 @@ export interface ParsedPrefab {
 }
 
 export interface HierarchyNode {
+  fileId?: string;
   name: string;
   layer?: number;
   tag?: string;

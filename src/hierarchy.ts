@@ -131,6 +131,7 @@ function buildHierarchyNode(
   }
   
   const node: HierarchyNode = {
+    fileId: transform.gameObjectFileId,
     name: gameObject.name,
   };
   
@@ -159,6 +160,55 @@ function buildHierarchyNode(
   }
   
   return node;
+}
+
+/**
+ * Build stable display keys for GameObjects.
+ * Uses full hierarchy paths when names repeat, and appends fileId when paths still collide.
+ */
+export function buildGameObjectDisplayMap(nodes: HierarchyNode[]): Map<string, string> {
+  const rawPaths = new Map<string, string>();
+  const rawNames = new Map<string, string>();
+  const pathCounts = new Map<string, number>();
+  const nameCounts = new Map<string, number>();
+
+  function walk(node: HierarchyNode, parentPath: string): void {
+    const path = parentPath ? `${parentPath}/${node.name}` : node.name;
+
+    if (node.fileId) {
+      rawPaths.set(node.fileId, path);
+      rawNames.set(node.fileId, node.name);
+      pathCounts.set(path, (pathCounts.get(path) || 0) + 1);
+      nameCounts.set(node.name, (nameCounts.get(node.name) || 0) + 1);
+    }
+
+    if (node.children) {
+      for (const child of node.children) {
+        walk(child, path);
+      }
+    }
+  }
+
+  for (const node of nodes) {
+    walk(node, '');
+  }
+
+  const displayMap = new Map<string, string>();
+  for (const [fileId, path] of rawPaths) {
+    const rawName = rawNames.get(fileId) || path;
+    const nameCount = nameCounts.get(rawName) || 0;
+    const pathCount = pathCounts.get(path) || 0;
+
+    const displayName = nameCount <= 1
+      ? rawName
+      : pathCount <= 1
+        ? path
+        : `${path} [${fileId}]`;
+
+    displayMap.set(fileId, displayName);
+  }
+
+  return displayMap;
 }
 
 /**
