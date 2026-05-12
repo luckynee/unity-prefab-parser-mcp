@@ -468,6 +468,10 @@ function formatValueToString(
     if (value.includes('  #')) {
       return value;
     }
+    // Empty string — render as explicit empty quotes so it's visible in output
+    if (value === '') {
+      return '""';
+    }
     // Quote strings that might be interpreted as other types
     if (value === 'true' || value === 'false' || value === 'null' || /^\d+$/.test(value)) {
       return `"${value}"`;

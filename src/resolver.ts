@@ -9,6 +9,7 @@ import {
   isDefaultRenderingValue,
   isDefaultOffset,
   isDefaultTransformValue,
+  isExplicitlyWhitelistedField,
 } from './components.js';
 
 /**
@@ -98,8 +99,14 @@ export function resolveReferences(
     }
     
     // Skip default values if configured
-    // BUT don't skip boolean fields that were converted - false is a valid value
-    if (!config.includeDefaultValues && !wasBooleanConverted && isDefaultValue(resolvedValue, key)) {
+    // BUT don't skip:
+    // - boolean fields that were converted (false is a valid value)
+    // - user-defined MonoBehaviour fields (0/"" are valid game data values)
+    // - numeric zero on explicitly whitelisted fields (e.g. gravityScale:0 means gravity off, bodyType:0 means Dynamic)
+    //   NOTE: only protect numeric zero — non-zero defaults like white color {r:1,g:1,b:1,a:1} should still be filtered
+    const isMonoBehaviourUserField = componentType === 'MonoBehaviour' && !key.startsWith('m_');
+    const isWhitelistedZero = isExplicitlyWhitelistedField(key, componentType) && resolvedValue === 0;
+    if (!config.includeDefaultValues && !wasBooleanConverted && !isMonoBehaviourUserField && !isWhitelistedZero && isDefaultValue(resolvedValue, key)) {
       continue;
     }
     

@@ -9,6 +9,7 @@ import {
   ErrorCode,
 } from '@modelcontextprotocol/sdk/types.js';
 import * as path from 'path';
+import { glob } from 'glob';
 
 import { loadConfig, type ParseConfig, type ParsedPrefab, type FileIdMap, type MetaFileCache, type HierarchyNode } from './config.js';
 import { parseUnityYAML, type ParsedDocument } from './parser.js';
@@ -767,11 +768,100 @@ Features:
         required: ['filePath'],
       },
     },
+    {
+      name: 'list_unity_assets',
+      description: 'Scan a directory for Unity asset files (.prefab, .unity, .asset) and return a grouped list with absolute paths ready to use with parse_unity_file.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: 'Directory to scan. Can be a Unity project root, an Assets folder, or any subfolder. If omitted, uses current working directory.',
+          },
+          type: {
+            type: 'string',
+            enum: ['prefab', 'unity', 'asset', 'all'],
+            description: 'Filter by file type. Default: all',
+          },
+          recursive: {
+            type: 'boolean',
+            description: 'Search recursively. Default: true',
+          },
+        },
+        required: [],
+      },
+    },
   ],
 }));
 
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name === 'list_unity_assets') {
+    const args = request.params.arguments as {
+      directory?: string;
+      type?: 'prefab' | 'unity' | 'asset' | 'all';
+      recursive?: boolean;
+    };
+
+    const scanDir = path.resolve(args.directory || process.cwd());
+    const fileType = args.type || 'all';
+    const recursive = args.recursive !== false; // default true
+
+    // Build glob patterns based on requested type
+    const patterns: string[] = [];
+    const globOpts = { cwd: scanDir, nodir: true, absolute: true };
+
+    if (fileType === 'all' || fileType === 'prefab') {
+      patterns.push(recursive ? '**/*.prefab' : '*.prefab');
+    }
+    if (fileType === 'all' || fileType === 'unity') {
+      patterns.push(recursive ? '**/*.unity' : '*.unity');
+    }
+    if (fileType === 'all' || fileType === 'asset') {
+      patterns.push(recursive ? '**/*.asset' : '*.asset');
+    }
+
+    try {
+      // Run all globs in parallel
+      const results = await Promise.all(patterns.map(p => glob(p, globOpts)));
+      const allFiles = results.flat().sort();
+
+      // Group by extension
+      const grouped: Record<string, string[]> = { prefab: [], unity: [], asset: [] };
+      for (const absPath of allFiles) {
+        const ext = path.extname(absPath).slice(1); // 'prefab' | 'unity' | 'asset'
+        if (grouped[ext]) {
+          grouped[ext].push(absPath);
+        }
+      }
+
+      // Build YAML-style output
+      const lines: string[] = [`scanned: ${scanDir}`, `total: ${allFiles.length}`, ''];
+
+      for (const [ext, files] of Object.entries(grouped)) {
+        if (files.length === 0) continue;
+        lines.push(`${ext}: # ${files.length} file${files.length !== 1 ? 's' : ''}`);
+        for (const absPath of files) {
+          const rel = path.relative(scanDir, absPath);
+          lines.push(`  - path: ${absPath}`);
+          lines.push(`    rel:  ${rel}`);
+        }
+        lines.push('');
+      }
+
+      if (allFiles.length === 0) {
+        lines.push('# No matching files found.');
+      }
+
+      return {
+        content: [{ type: 'text', text: lines.join('\n') }],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new McpError(ErrorCode.InternalError, `Error scanning directory: ${message}`);
+    }
+  }
+
   if (request.params.name === 'parse_unity_prefab' || request.params.name === 'parse_unity_file') {
     const args = request.params.arguments as {
       filePath: string;

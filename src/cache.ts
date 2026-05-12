@@ -3,6 +3,15 @@ import * as path from 'path';
 import { glob } from 'glob';
 import type { MetaFileCache, MetaFileCacheEntry } from './config.js';
 
+// Well-known Unity built-in asset GUIDs (these have no .meta files)
+const UNITY_BUILTIN_ASSETS: MetaFileCache = {
+  '0000000000000000f000000000000000': { name: 'Sprites-Default', type: 'Material', path: 'Built-in' },
+  '0000000000000000e000000000000000': { name: 'Default-Material', type: 'Material', path: 'Built-in' },
+  '0000000000000000d000000000000000': { name: 'Default-Diffuse', type: 'Material', path: 'Built-in' },
+  '0000000000000000c000000000000000': { name: 'Default-Skybox', type: 'Material', path: 'Built-in' },
+  '10000000000000000000000000000000': { name: 'Default-Particle', type: 'Material', path: 'Built-in' },
+};
+
 // Map Unity's importer types to readable asset type names
 const IMPORTER_TYPE_MAP: Record<string, string> = {
   'MonoImporter': 'MonoScript',
@@ -179,7 +188,7 @@ export async function buildAssetCache(
     return globalCache;
   }
   
-  const cache: MetaFileCache = {};
+  const cache: MetaFileCache = { ...UNITY_BUILTIN_ASSETS };
   const assetsDir = path.join(projectRoot, 'Assets');
   
   try {

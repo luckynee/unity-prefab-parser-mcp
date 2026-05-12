@@ -638,11 +638,14 @@ describe('Extended Default Value Filtering', () => {
   test('filters physics default values', () => {
     const config = loadConfig({ preset: 'compact' });
     
+    // density is still in DEFAULT_RENDERING_VALUES and is filtered via filterDefaultRenderingProps.
+    // mass/gravityScale were removed from DEFAULT_RENDERING_VALUES (fix #2) so they are no longer
+    // globally filtered. Use m_-prefixed keys so fix #3 (MonoBehaviour user field protection) doesn't apply.
     const testData = {
-      density: 1,           // Default - should be filtered
-      mass: 1,              // Default - should be filtered
-      gravityScale: 1,      // Default - should be filtered
-      speed: 5,             // Not default - should be kept
+      m_Density: 1,         // Still in DEFAULT_RENDERING_VALUES - should be filtered
+      m_Mass: 1,            // Removed from DEFAULT_RENDERING_VALUES - isDefaultValue(1) is false, kept
+      m_GravityScale: 1,    // Removed from DEFAULT_RENDERING_VALUES - isDefaultValue(1) is false, kept
+      m_Speed: 5,           // Not default - should be kept
     };
     
     const resolved = resolveReferences(
@@ -653,10 +656,8 @@ describe('Extended Default Value Filtering', () => {
       config
     );
     
-    assert.ok(!('density' in resolved), 'Default density should be filtered');
-    assert.ok(!('mass' in resolved), 'Default mass should be filtered');
-    assert.ok(!('gravityScale' in resolved), 'Default gravityScale should be filtered');
-    assert.equal(resolved.speed, 5, 'Non-default speed should be kept');
+    assert.ok(!('density' in resolved) && !('m_Density' in resolved), 'Default density should be filtered');
+    assert.equal(resolved.speed ?? resolved.m_Speed, 5, 'Non-default speed should be kept');
   });
 
   test('filters collider default values', () => {
@@ -955,11 +956,11 @@ describe('Short Reference Syntax', () => {
 });
 
 describe('SortingLayerID Removal', () => {
-  test('omits sortingLayerID in compact mode', () => {
+  test('omits sortingLayerID: 0 in compact mode (via DEFAULT_RENDERING_VALUES)', () => {
     const config = loadConfig({ preset: 'compact' });
     
     const testData = {
-      sortingLayerID: -144388009,
+      sortingLayerID: 0,    // Zero — filtered via DEFAULT_RENDERING_VALUES
       sortingLayer: 5,
       sortingOrder: 10,
     };
@@ -970,10 +971,28 @@ describe('SortingLayerID Removal', () => {
       components: new Map(),
     }, {}, config);
     
-    assert.ok(!('sortingLayerID' in resolved), 'sortingLayerID should be omitted');
+    assert.ok(!('sortingLayerID' in resolved), 'sortingLayerID: 0 should be omitted (default)');
     // sortingLayer is abbreviated to sLayer in compact mode
     assert.equal(resolved.sLayer, 5, 'sortingLayer should be kept (as sLayer)');
     assert.equal(resolved.order, 10, 'sortingOrder should be kept (as order)');
+  });
+
+  test('keeps non-zero sortingLayerID in compact mode', () => {
+    const config = loadConfig({ preset: 'compact' });
+    
+    const testData = {
+      sortingLayerID: 15,   // Non-zero — meaningful, should be kept
+      sortingLayer: 5,
+      sortingOrder: 10,
+    };
+    
+    const resolved = resolveReferences(testData, 'MonoBehaviour', {
+      gameObjects: new Map(),
+      transforms: new Map(),
+      components: new Map(),
+    }, {}, config);
+    
+    assert.equal(resolved.sortingLayerID, 15, 'Non-zero sortingLayerID should be kept');
   });
 });
 

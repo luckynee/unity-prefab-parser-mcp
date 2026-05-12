@@ -34,8 +34,8 @@ export const COMPACT_MODE_EXCLUDE = [
   'm_ConstrainProportionsScale',
   'm_LocalEulerAnglesHint',
   'm_RootOrder',
-  'sortingLayerID',             // Redundant - sortingLayer (name) is more useful
-  'm_SortingLayerID',           // Same as above
+  // sortingLayerID / m_SortingLayerID removed: non-zero values (e.g. 15) are meaningful.
+  // Zero values are still filtered via DEFAULT_RENDERING_VALUES.
 ];
 
 // Field name abbreviations for compact mode
@@ -158,21 +158,9 @@ export const DEFAULT_RENDERING_VALUES: Record<string, unknown> = {
   m_RayTracingAccelStructBuildFlags: 1,
   m_ForceMeshLod: -1,
   
-  // Physics defaults (Collider/Rigidbody)
+  // Physics defaults (Collider only — Rigidbody2D fields removed to avoid silently dropping non-default values)
   density: 1,
   m_Density: 1,
-  mass: 1,
-  m_Mass: 1,
-  drag: 0,
-  m_Drag: 0,
-  angularDrag: 0.05,
-  m_AngularDrag: 0.05,
-  gravityScale: 1,
-  m_GravityScale: 1,
-  linearDamping: 0,
-  m_LinearDamping: 0,
-  angularDamping: 0.05,
-  m_AngularDamping: 0.05,
   
   // Collider defaults
   edgeRadius: 0,
@@ -213,6 +201,19 @@ export const DEFAULT_RENDERING_VALUES: Record<string, unknown> = {
   m_FlipX: 0,
   flipY: 0,
   m_FlipY: 0,
+
+  // Sorting layer name index (0 = default layer, redundant when sortingLayerID is shown)
+  sortingLayer: 0,
+  m_SortingLayer: 0,
+  sLayer: 0,           // abbreviated form
+
+  // Draw mode defaults
+  drawMode: 0,
+  m_DrawMode: 0,
+  spriteTileMode: 0,
+  m_SpriteTileMode: 0,
+  maskInteraction: 0,
+  m_MaskInteraction: 0,
 };
 
 /**
@@ -428,12 +429,17 @@ export const INSPECTOR_FIELDS: Record<string, ComponentFilter> = {
 
   Rigidbody2D: {
     include: [
-      'm_Mass', 'm_LinearDamping', 'm_AngularDamping', 'm_GravityScale',
+      'm_Mass',
+      'm_LinearDrag', 'm_AngularDrag',           // Unity 2021 and earlier
+      'm_LinearDamping', 'm_AngularDamping',      // Unity 2022+
+      'm_GravityScale',
       'm_BodyType', 'm_Constraints', 'm_Simulated', 'm_Material',
       'm_UseAutoMass', 'm_Interpolate', 'm_SleepingMode', 'm_CollisionDetection',
     ],
     rename: {
       'm_Mass': 'mass',
+      'm_LinearDrag': 'linearDrag',
+      'm_AngularDrag': 'angularDrag',
       'm_LinearDamping': 'linearDamping',
       'm_AngularDamping': 'angularDamping',
       'm_GravityScale': 'gravityScale',
@@ -969,6 +975,17 @@ export function shouldExcludeField(fieldName: string, componentType: string): bo
   }
 
   return false;
+}
+
+/**
+ * Check if a field is explicitly listed in a component's include whitelist.
+ * Fields that are explicitly whitelisted should never have their zero/empty
+ * values silently dropped — they were intentionally included.
+ */
+export function isExplicitlyWhitelistedField(fieldName: string, componentType: string): boolean {
+  const filter = getComponentFilter(componentType);
+  if (!Array.isArray(filter.include)) return false;
+  return filter.include.includes(fieldName);
 }
 
 /**
