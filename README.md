@@ -170,16 +170,19 @@ Add to your `opencode.json`:
 }
 ```
 
-**OpenCode users:** copy the bundled skills to your OpenCode skills directory for guided workflow and slash commands:
+**OpenCode users:** copy the bundled skills and commands to your OpenCode config directory:
 
 ```bash
-# Copy all three Unity skills to OpenCode
+# Copy all three Unity skills
 cp -r /path/to/unity-prefab-parser-mcp/skills/unity-asset-workflow ~/.config/opencode/skills/
 cp -r /path/to/unity-prefab-parser-mcp/skills/unity-diff-workflow ~/.config/opencode/skills/
 cp -r /path/to/unity-prefab-parser-mcp/skills/unity-scene-workflow ~/.config/opencode/skills/
+
+# Copy all Unity slash commands
+cp /path/to/unity-prefab-parser-mcp/commands/*.md ~/.config/opencode/commands/
 ```
 
-Then restart OpenCode. The skills will appear in `/skills`.
+Then restart OpenCode. Skills appear in `/skills`, commands appear in `/commands`.
 
 | Skill | Purpose |
 |---|---|
@@ -188,12 +191,12 @@ Then restart OpenCode. The skills will appear in `/skills`.
 | `unity-scene-workflow` | Navigate large `.unity` scenes token-efficiently |
 
 Slash commands available after installing:
-- `/init-unity [path]` — initialize project cache
-- `/browse-unity [path]` — browse project tree
-- `/list-assets [path] [type] [search]` — list assets
-- `/parse-asset [path]` — parse with compact preset
-- `/diff-prefabs [pathA] [pathB]` — compare two prefabs
-- `/scene-overview [path]` — get hierarchy-only view of a scene
+- `/unity-init [path]` — initialize project cache
+- `/unity-browse [path]` — browse project tree
+- `/unity-list [path] [type] [search]` — list assets
+- `/unity-parse [path]` — parse with compact preset
+- `/unity-diff [pathA] [pathB]` — compare two prefabs or scenes
+- `/unity-scene [path]` — token-efficient scene overview
 
 ### VS Code (GitHub Copilot / MCP extension)
 
@@ -388,6 +391,13 @@ unity-prefab-parser-mcp/
 │   │   └── SKILL.md    # Compare prefabs, variants, scenes
 │   └── unity-scene-workflow/
 │       └── SKILL.md    # Navigate large scenes token-efficiently
+├── commands/
+│   ├── unity-init.md   # /unity-init [path]
+│   ├── unity-browse.md # /unity-browse [path]
+│   ├── unity-list.md   # /unity-list [path] [type] [search]
+│   ├── unity-parse.md  # /unity-parse [path]
+│   ├── unity-diff.md   # /unity-diff [pathA] [pathB]
+│   └── unity-scene.md  # /unity-scene [path]
 ├── test/
 │   └── parser.test.ts  # Test suite (103 tests)
 ├── AGENTS.md           # Auto-read by Codex and Claude Code
