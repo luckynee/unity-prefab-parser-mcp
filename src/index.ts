@@ -8,6 +8,7 @@ import {
   McpError,
   ErrorCode,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import { glob } from 'glob';
 
@@ -26,6 +27,54 @@ import {
   type PrefabVariantInfo,
   type PropertyModification,
 } from './variant.js';
+
+// ---------------------------------------------------------------------------
+// Global in-memory registry: projectPath → loaded MetaFileCache
+// Populated by init_unity_project; used by parsePrefab to skip rescanning
+// ---------------------------------------------------------------------------
+const projectCacheRegistry = new Map<string, MetaFileCache>();
+
+// ---------------------------------------------------------------------------
+// Disk cache helpers
+// ---------------------------------------------------------------------------
+
+interface DiskCacheFile {
+  projectPath: string;
+  scannedAt: string;
+  assetCount: number;
+  assets: MetaFileCache;
+}
+
+const CACHE_FILENAME = '.unity-mcp-cache.json';
+const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+async function loadDiskCache(projectPath: string): Promise<DiskCacheFile | null> {
+  const cachePath = path.join(projectPath, CACHE_FILENAME);
+  try {
+    const raw = await fs.readFile(cachePath, 'utf-8');
+    const data = JSON.parse(raw) as DiskCacheFile;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+async function saveDiskCache(projectPath: string, assets: MetaFileCache): Promise<string> {
+  const cachePath = path.join(projectPath, CACHE_FILENAME);
+  const data: DiskCacheFile = {
+    projectPath,
+    scannedAt: new Date().toISOString(),
+    assetCount: Object.keys(assets).length,
+    assets,
+  };
+  await fs.writeFile(cachePath, JSON.stringify(data, null, 2), 'utf-8');
+  return cachePath;
+}
+
+function isCacheFresh(scannedAt: string): boolean {
+  const age = Date.now() - new Date(scannedAt).getTime();
+  return age < CACHE_MAX_AGE_MS;
+}
 
 /**
  * Main function to parse a Unity prefab file
@@ -47,9 +96,21 @@ async function parsePrefab(filePath: string, config: ParseConfig): Promise<strin
   }
   
   // 4. Build GUID → Name cache from .meta files (if project root found)
+  // Prefer: in-memory registry → disk cache → live scan
   let assetCache: MetaFileCache = {};
   if (projectRoot && config.resolveAssetNames) {
-    assetCache = await buildAssetCache(projectRoot, config.cacheMetaFiles);
+    const registryCache = projectCacheRegistry.get(projectRoot);
+    if (registryCache) {
+      assetCache = registryCache;
+    } else {
+      const diskCache = await loadDiskCache(projectRoot);
+      if (diskCache && isCacheFresh(diskCache.scannedAt)) {
+        assetCache = diskCache.assets;
+        projectCacheRegistry.set(projectRoot, assetCache);
+      } else {
+        assetCache = await buildAssetCache(projectRoot, config.cacheMetaFiles);
+      }
+    }
   }
   
   // 5. Check if this is a prefab variant
@@ -657,9 +718,62 @@ const server = new Server(
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
+      name: 'init_unity_project',
+      description: `Initialize a Unity project for use with this MCP. Scans all .meta files to build a GUID→asset name cache, enabling full asset name resolution in parse_unity_file.
+
+WORKFLOW: Call this ONCE per project before using parse_unity_file or browse_unity_project. The cache is saved to .unity-mcp-cache.json in the project root and reused automatically.
+
+For large projects (100GB+), this may take 10-30 seconds but only needs to run once per session or when assets change significantly.`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Path to Unity project root (the folder containing Assets/, ProjectSettings/, etc.). Required.',
+          },
+          force: {
+            type: 'boolean',
+            description: 'Force rescan even if cache exists. Default: false.',
+          },
+        },
+        required: ['projectPath'],
+      },
+    },
+    {
+      name: 'browse_unity_project',
+      description: `Browse the Unity project folder tree with asset counts. Use this to navigate large projects and find the subfolder containing the assets you want to work with.
+
+WORKFLOW:
+1. init_unity_project (once)
+2. browse_unity_project (navigate to the right folder)
+3. list_unity_assets (list assets in that folder)
+4. parse_unity_file (parse specific assets)`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Unity project root path (must have been initialized with init_unity_project first, or will auto-init).',
+          },
+          subPath: {
+            type: 'string',
+            description: 'Subfolder to browse relative to Assets/. Omit to browse Assets/ root.',
+          },
+          depth: {
+            type: 'number',
+            description: 'How many folder levels to show. Default: 2.',
+          },
+        },
+        required: ['projectPath'],
+      },
+    },
+    {
       name: 'parse_unity_file',
       description: `Parse a Unity text-serialized prefab, scene, or asset file and extract Inspector-visible component data in YAML format.
-Automatically resolves asset names from GUIDs by scanning the project's .meta files.
+
+WORKFLOW: For best results with asset name resolution, call init_unity_project first. If already initialized, the cache is loaded automatically.
+
+Automatically resolves asset names from GUIDs by scanning the project's .meta files (or using the initialized cache).
 Outputs a clean, hierarchical structure showing the GameObject tree and all component data.
 
 IMPORTANT: Fields not shown in output have their default values or are null references.
@@ -752,7 +866,9 @@ Features:
     },
     {
       name: 'parse_unity_prefab',
-      description: 'Deprecated alias for parse_unity_file. Use parse_unity_file for new clients.',
+      description: `Deprecated alias for parse_unity_file. Use parse_unity_file for new clients.
+
+WORKFLOW: For best results with asset name resolution, call init_unity_project first. If already initialized, the cache is loaded automatically.`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -787,6 +903,14 @@ Features:
             type: 'boolean',
             description: 'Search recursively. Default: true',
           },
+          search: {
+            type: 'string',
+            description: 'Filter assets by name (case-insensitive). E.g. "enemy" returns EnemyBat.prefab, EnemyWolf.prefab etc.',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum number of results to return. Default: 50.',
+          },
         },
         required: [],
       },
@@ -796,16 +920,233 @@ Features:
 
 // Handle tool calls
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
+
+  // -------------------------------------------------------------------------
+  // init_unity_project
+  // -------------------------------------------------------------------------
+  if (request.params.name === 'init_unity_project') {
+    const args = request.params.arguments as {
+      projectPath: string;
+      force?: boolean;
+    };
+
+    if (!args.projectPath) {
+      throw new McpError(ErrorCode.InvalidParams, 'projectPath is required');
+    }
+
+    const projectPath = path.resolve(args.projectPath);
+
+    // Validate Assets/ folder exists
+    const assetsDir = path.join(projectPath, 'Assets');
+    try {
+      const stat = await fs.stat(assetsDir);
+      if (!stat.isDirectory()) {
+        throw new McpError(ErrorCode.InvalidParams, `${assetsDir} exists but is not a directory`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new McpError(ErrorCode.InvalidParams, `Not a Unity project root — Assets/ folder not found at: ${assetsDir}`);
+      }
+      throw err;
+    }
+
+    // Check existing cache freshness (unless force)
+    if (!args.force) {
+      const existing = await loadDiskCache(projectPath);
+      if (existing && isCacheFresh(existing.scannedAt)) {
+        // Load into registry so subsequent calls benefit
+        projectCacheRegistry.set(projectPath, existing.assets);
+        const cacheFile = path.join(projectPath, CACHE_FILENAME);
+        return {
+          content: [{
+            type: 'text',
+            text: [
+              `status: already_initialized`,
+              `projectPath: ${projectPath}`,
+              `assetCount: ${existing.assetCount}`,
+              `scannedAt: ${existing.scannedAt}`,
+              `cacheFile: ${cacheFile}`,
+              ``,
+              `# Cache is less than 24 hours old. Use force: true to rescan.`,
+            ].join('\n'),
+          }],
+        };
+      }
+    }
+
+    // Run the scan
+    const startMs = Date.now();
+    try {
+      const assets = await buildAssetCache(projectPath, false); // false = bypass in-memory cache, do fresh scan
+      const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
+
+      // Save to disk
+      const cacheFile = await saveDiskCache(projectPath, assets);
+
+      // Register in memory
+      projectCacheRegistry.set(projectPath, assets);
+
+      const assetCount = Object.keys(assets).length;
+      return {
+        content: [{
+          type: 'text',
+          text: [
+            `status: initialized`,
+            `projectPath: ${projectPath}`,
+            `assetCount: ${assetCount}`,
+            `timeTaken: ${elapsed}s`,
+            `cacheFile: ${cacheFile}`,
+            ``,
+            `# Cache saved. Subsequent parse_unity_file calls will use this cache automatically.`,
+          ].join('\n'),
+        }],
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new McpError(ErrorCode.InternalError, `Error initializing project: ${message}`);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // browse_unity_project
+  // -------------------------------------------------------------------------
+  if (request.params.name === 'browse_unity_project') {
+    const args = request.params.arguments as {
+      projectPath: string;
+      subPath?: string;
+      depth?: number;
+    };
+
+    if (!args.projectPath) {
+      throw new McpError(ErrorCode.InvalidParams, 'projectPath is required');
+    }
+
+    const projectPath = path.resolve(args.projectPath);
+    const depth = typeof args.depth === 'number' ? Math.max(1, args.depth) : 2;
+
+    // Build the root browse path
+    const browseRoot = args.subPath
+      ? path.join(projectPath, 'Assets', args.subPath)
+      : path.join(projectPath, 'Assets');
+
+    // Validate it exists
+    try {
+      const stat = await fs.stat(browseRoot);
+      if (!stat.isDirectory()) {
+        throw new McpError(ErrorCode.InvalidParams, `Path is not a directory: ${browseRoot}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new McpError(ErrorCode.InvalidParams, `Directory not found: ${browseRoot}`);
+      }
+      throw err;
+    }
+
+    // Recursively count assets in a directory
+    async function countAssets(dir: string): Promise<{ prefab: number; unity: number; asset: number }> {
+      const [prefabs, scenes, assets] = await Promise.all([
+        glob('**/*.prefab', { cwd: dir, nodir: true }),
+        glob('**/*.unity', { cwd: dir, nodir: true }),
+        glob('**/*.asset', { cwd: dir, nodir: true }),
+      ]);
+      return { prefab: prefabs.length, unity: scenes.length, asset: assets.length };
+    }
+
+    // Build tree lines recursively
+    async function buildTree(
+      dir: string,
+      currentDepth: number,
+      prefix: string,
+      isLast: boolean,
+    ): Promise<string[]> {
+      const lines: string[] = [];
+
+      // Read immediate children (directories only)
+      let entries: string[];
+      try {
+        const dirents = await fs.readdir(dir, { withFileTypes: true });
+        entries = dirents
+          .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+          .map(d => d.name)
+          .sort();
+      } catch {
+        return lines;
+      }
+
+      for (let i = 0; i < entries.length; i++) {
+        const name = entries[i];
+        const childPath = path.join(dir, name);
+        const childIsLast = i === entries.length - 1;
+        const connector = childIsLast ? '└── ' : '├── ';
+        const childPrefix = prefix + (childIsLast ? '    ' : '│   ');
+
+        // Count assets in this subtree
+        const counts = await countAssets(childPath);
+        const total = counts.prefab + counts.unity + counts.asset;
+
+        // Build count label
+        const parts: string[] = [];
+        if (counts.prefab > 0) parts.push(`${counts.prefab} prefab${counts.prefab !== 1 ? 's' : ''}`);
+        if (counts.unity > 0) parts.push(`${counts.unity} scene${counts.unity !== 1 ? 's' : ''}`);
+        if (counts.asset > 0) parts.push(`${counts.asset} asset${counts.asset !== 1 ? 's' : ''}`);
+        const label = parts.length > 0 ? `  (${parts.join(', ')})` : '';
+
+        lines.push(`${prefix}${connector}${name}/${label}`);
+        lines.push(`  # abs: ${childPath}`);
+
+        // Recurse if within depth
+        if (currentDepth < depth) {
+          const childLines = await buildTree(childPath, currentDepth + 1, childPrefix, childIsLast);
+          lines.push(...childLines);
+        }
+      }
+
+      return lines;
+    }
+
+    try {
+      const rootLabel = args.subPath ? `Assets/${args.subPath}/` : 'Assets/';
+      const rootCounts = await countAssets(browseRoot);
+      const rootParts: string[] = [];
+      if (rootCounts.prefab > 0) rootParts.push(`${rootCounts.prefab} prefabs`);
+      if (rootCounts.unity > 0) rootParts.push(`${rootCounts.unity} scenes`);
+      if (rootCounts.asset > 0) rootParts.push(`${rootCounts.asset} assets`);
+      const rootLabel2 = rootParts.length > 0 ? `${rootLabel}  (${rootParts.join(', ')} total)` : rootLabel;
+
+      const treeLines = await buildTree(browseRoot, 1, '', false);
+
+      const output = [
+        rootLabel2,
+        ...treeLines,
+        '',
+        `# Showing ${depth} level(s). Use depth param to see more.`,
+        `# Pass a folder's abs path to list_unity_assets to list its files.`,
+      ].join('\n');
+
+      return { content: [{ type: 'text', text: output }] };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new McpError(ErrorCode.InternalError, `Error browsing project: ${message}`);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // list_unity_assets
+  // -------------------------------------------------------------------------
   if (request.params.name === 'list_unity_assets') {
     const args = request.params.arguments as {
       directory?: string;
       type?: 'prefab' | 'unity' | 'asset' | 'all';
       recursive?: boolean;
+      search?: string;
+      limit?: number;
     };
 
     const scanDir = path.resolve(args.directory || process.cwd());
     const fileType = args.type || 'all';
     const recursive = args.recursive !== false; // default true
+    const searchTerm = args.search ? args.search.toLowerCase() : null;
+    const limit = typeof args.limit === 'number' ? args.limit : 50;
 
     // Build glob patterns based on requested type
     const patterns: string[] = [];
@@ -824,19 +1165,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
       // Run all globs in parallel
       const results = await Promise.all(patterns.map(p => glob(p, globOpts)));
-      const allFiles = results.flat().sort();
+      let allFiles = results.flat().sort();
+
+      // Apply search filter
+      if (searchTerm) {
+        allFiles = allFiles.filter(f => path.basename(f).toLowerCase().includes(searchTerm));
+      }
+
+      const totalCount = allFiles.length;
+      const truncated = totalCount > limit;
+      const displayFiles = truncated ? allFiles.slice(0, limit) : allFiles;
 
       // Group by extension
       const grouped: Record<string, string[]> = { prefab: [], unity: [], asset: [] };
-      for (const absPath of allFiles) {
-        const ext = path.extname(absPath).slice(1); // 'prefab' | 'unity' | 'asset'
+      for (const absPath of displayFiles) {
+        const ext = path.extname(absPath).slice(1);
         if (grouped[ext]) {
           grouped[ext].push(absPath);
         }
       }
 
       // Build YAML-style output
-      const lines: string[] = [`scanned: ${scanDir}`, `total: ${allFiles.length}`, ''];
+      const lines: string[] = [
+        `scanned: ${scanDir}`,
+        `total: ${totalCount}${truncated ? ` (showing first ${limit})` : ''}`,
+        '',
+      ];
+
+      if (searchTerm) {
+        lines.splice(2, 0, `search: "${args.search}"`);
+      }
 
       for (const [ext, files] of Object.entries(grouped)) {
         if (files.length === 0) continue;
@@ -849,8 +1207,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         lines.push('');
       }
 
-      if (allFiles.length === 0) {
+      if (totalCount === 0) {
         lines.push('# No matching files found.');
+      } else if (truncated) {
+        lines.push(`# ${totalCount - limit} more files not shown. Use limit param or narrow with search/type.`);
       }
 
       return {
