@@ -1,3 +1,8 @@
+---
+name: unity-scene-workflow
+description: Use when working with Unity .unity scene files. Guides token-efficient navigation of large scenes with hundreds of GameObjects.
+---
+
 # Skill: unity-scene-workflow
 
 Use this skill when working with Unity `.unity` scene files. Scenes are much larger than prefabs — a typical scene can have hundreds of GameObjects and cost 50,000+ raw tokens. This skill keeps token usage manageable.

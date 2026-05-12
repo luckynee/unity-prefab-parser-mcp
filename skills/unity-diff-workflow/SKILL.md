@@ -1,3 +1,8 @@
+---
+name: unity-diff-workflow
+description: Use when comparing Unity .prefab, .unity, or .asset files across versions, variants, or branches.
+---
+
 # Skill: unity-diff-workflow
 
 Use this skill when comparing Unity `.prefab`, `.unity`, or `.asset` files — across versions, variants, or branches.

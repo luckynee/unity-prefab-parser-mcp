@@ -1,3 +1,8 @@
+---
+name: unity-asset-workflow
+description: Use when working with Unity .prefab, .unity, or .asset files via the unity-prefab-parser MCP. Guides init, browse, list, and parse workflow.
+---
+
 # Skill: unity-asset-workflow
 
 Use this skill when working with Unity `.prefab`, `.unity`, or `.asset` files via the unity-prefab-parser MCP.
