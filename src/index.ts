@@ -905,7 +905,11 @@ WORKFLOW: For best results with asset name resolution, call init_unity_project f
           },
           search: {
             type: 'string',
-            description: 'Filter assets by name (case-insensitive). E.g. "enemy" returns EnemyBat.prefab, EnemyWolf.prefab etc.',
+            description: 'Filter assets by name (case-insensitive substring). E.g. "enemy" returns EnemyBat.prefab, EnemyWolf.prefab etc.',
+          },
+          exact: {
+            type: 'boolean',
+            description: 'When true, only match files whose name (without extension) exactly equals the search term. E.g. search:"bat" exact:true returns Bat.prefab, BatPF.prefab but NOT CombatText.prefab. Default: false.',
           },
           limit: {
             type: 'number',
@@ -1133,12 +1137,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   // -------------------------------------------------------------------------
   // list_unity_assets
   // -------------------------------------------------------------------------
-  if (request.params.name === 'list_unity_assets') {
+   if (request.params.name === 'list_unity_assets') {
     const args = request.params.arguments as {
       directory?: string;
       type?: 'prefab' | 'unity' | 'asset' | 'all';
       recursive?: boolean;
       search?: string;
+      exact?: boolean;
       limit?: number;
     };
 
@@ -1146,6 +1151,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const fileType = args.type || 'all';
     const recursive = args.recursive !== false; // default true
     const searchTerm = args.search ? args.search.toLowerCase() : null;
+    const exactMatch = args.exact === true;
     const limit = typeof args.limit === 'number' ? args.limit : 50;
 
     // Build glob patterns based on requested type
@@ -1169,7 +1175,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       // Apply search filter
       if (searchTerm) {
-        allFiles = allFiles.filter(f => path.basename(f).toLowerCase().includes(searchTerm));
+        allFiles = allFiles.filter(f => {
+          const basename = path.basename(f);
+          const stem = basename.replace(/\.(prefab|unity|asset)$/i, '');
+          if (exactMatch) {
+            // Word-boundary match: search term must appear at start or after a separator (_  - space),
+            // followed by end-of-string, separator, digit, or uppercase (camelCase boundary) — not lowercase.
+            // e.g. "bat" matches: Bat, BatPF, Bat_cave, pf_base_bat — but NOT Combat, CombatText, Battery
+            const matchRe = new RegExp(`(^|[_\\s\\-])${searchTerm}`, 'i');
+            const m = stem.match(matchRe);
+            if (!m) return false;
+            const afterIdx = (m.index ?? 0) + m[0].length;
+            const nextChar = stem[afterIdx];
+            return !nextChar || /[_\s\-0-9A-Z]/.test(nextChar);
+          }
+          return basename.toLowerCase().includes(searchTerm);
+        });
       }
 
       const totalCount = allFiles.length;
