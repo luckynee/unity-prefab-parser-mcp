@@ -1,49 +1,157 @@
 # Unity Prefab Parser MCP Server
 
-An MCP (Model Context Protocol) server that parses Unity **text-serialized** `.prefab`, `.unity`, and `.asset` files and outputs only Inspector-visible data in a clean, hierarchical YAML format, reducing token usage by 70-90%.
+An MCP (Model Context Protocol) server that parses Unity **text-serialized** `.prefab`, `.unity`, and `.asset` files and outputs only Inspector-visible data in a clean, hierarchical YAML format — reducing token usage by up to 92%.
 
-## Important: Usage with AI Tools
+Works with **any MCP-compatible AI client**: Claude Desktop, OpenCode, VS Code Copilot, Cursor, Windsurf, Codex, and more.
 
-> **Warning**: Do NOT use `@filename.prefab` syntax to reference Unity files in OpenCode, Cursor, or similar AI tools. This reads the raw file content and costs many tokens (10,000-50,000+ tokens for complex prefabs).
->
-> Instead, **paste the full file path manually** and let the AI use this MCP parser tool, which provides a token-efficient parsed output (70-90% savings).
->
-> **Example prompt:**
-> ```
-> Parse this prefab: /path/to/Project/Assets/Prefabs/MyPrefab.prefab
-> ```
->
-> The AI will automatically use the `parse_unity_file` MCP tool.
+---
 
-## Unity serialization requirement
-
-This server works on Unity's **text serialization** format (`UnityYAML`). If a file is stored in **binary** form, the server will reject it and tell you to switch Unity to **Force Text**.
-
-- Unity setting: **Edit > Project Settings > Editor > Asset Serialization > Mode = Force Text**
-- Official docs:
-  - https://docs.unity3d.com/Manual/class-EditorManager.html
-  - https://docs.unity3d.com/Manual/UnityYAML.html
-
-## Features
-
-- **Token Efficient**: Outputs clean YAML with only Inspector-visible properties (70-90% reduction)
-- **Tree Hierarchy**: Visual tree format with Unicode connectors in compact mode
-- **Prefab Variant Support**: Detects variants and shows only modifications with markers (`# $`, `# +`, `# -`)
-- **GUID Resolution**: Automatically resolves asset GUIDs to human-readable names
-- **Internal Reference Resolution**: Resolves fileID references to readable `@GameObjectName` format
-- **Field Abbreviations**: Shortens field names in compact mode (`localPosition` → `lPos`)
-- **Smart Filtering**: Excludes Unity internal fields, default values, and disabled components
-- **Layer Name Mapping**: Shows layer names instead of numbers (`l: UI` instead of `layer: 5`)
-- **Configurable**: Multiple presets (minimal, standard, compact) and custom options
-
-## Installation
+## Quick Start
 
 ```bash
-npm install
-npm run build
+git clone https://github.com/luckynee/unity-prefab-parser-mcp.git
+cd unity-prefab-parser-mcp
+npm install && npm run build
 ```
 
-## MCP Client Setup
+Then add to your AI client config (see [Client Setup](#client-setup) below).
+
+---
+
+## Recommended Workflow
+
+### First time on a project
+```
+1. init_unity_project   — scan .meta files, build GUID cache (once per project)
+2. browse_unity_project — navigate folder tree to find the right subfolder
+3. list_unity_assets    — list assets in that folder (filter by type or name)
+4. parse_unity_file     — parse with preset: "compact" for token-efficient output
+```
+
+### Subsequent sessions
+Skip `init_unity_project` if `.unity-mcp-cache.json` exists and is less than 24h old. Go straight to `browse_unity_project` or `list_unity_assets`.
+
+### Example prompt
+```
+Initialize my Unity project at /path/to/MyGame, then show me all enemy prefabs.
+```
+The AI will call `init_unity_project` → `browse_unity_project` → `list_unity_assets` → `parse_unity_file` automatically.
+
+---
+
+## Tools
+
+### `init_unity_project`
+Scans all `.meta` files in a Unity project and saves a GUID→asset name cache to `.unity-mcp-cache.json`. Run once per project. Subsequent parse calls load from cache automatically — zero rescan cost.
+
+```json
+{
+  "projectPath": "/path/to/MyUnityProject",
+  "force": false
+}
+```
+
+- `projectPath` — path to the Unity project root (the folder containing `Assets/`, `ProjectSettings/`)
+- `force` — force rescan even if cache is fresh (default: `false`)
+
+Returns: asset count, time taken, cache file location.
+
+---
+
+### `browse_unity_project`
+Navigate the Unity project folder tree with asset counts per folder. Use this to find the subfolder you want before calling `list_unity_assets`.
+
+```json
+{
+  "projectPath": "/path/to/MyUnityProject",
+  "subPath": "Assets/Enemies",
+  "depth": 2
+}
+```
+
+Example output:
+```
+Assets/
+├── Enemies/          (12 prefabs)
+├── UI/               (8 prefabs, 3 assets)
+│   ├── HUD/          (4 prefabs)
+│   └── Menus/        (4 prefabs)
+├── Levels/           (5 scenes)
+└── ScriptableObjects/ (23 assets)
+```
+
+---
+
+### `list_unity_assets`
+List `.prefab`, `.unity`, and `.asset` files in a directory with absolute paths ready to paste into `parse_unity_file`.
+
+```json
+{
+  "directory": "/path/to/MyUnityProject/Assets/Enemies",
+  "type": "prefab",
+  "search": "bat",
+  "recursive": true,
+  "limit": 50
+}
+```
+
+- `type` — `"prefab"`, `"unity"`, `"asset"`, or `"all"` (default: `"all"`)
+- `search` — case-insensitive name filter (e.g. `"enemy"` returns `EnemyBat.prefab`, `EnemyWolf.prefab`)
+- `recursive` — search subfolders (default: `true`)
+- `limit` — max results (default: `50`)
+
+---
+
+### `parse_unity_file`
+Parse a Unity text-serialized file and extract Inspector-visible component data as clean YAML.
+
+```json
+{
+  "filePath": "/path/to/MyUnityProject/Assets/Enemies/BatPF.prefab",
+  "config": {
+    "preset": "compact"
+  }
+}
+```
+
+**Presets:**
+
+| Preset | Token reduction | Best for |
+|--------|----------------|----------|
+| `compact` | ~92% | LLM analysis, comparisons |
+| `standard` | ~84% | When you need GUID comments |
+| `minimal` | ~95% | Quick structural overview |
+
+You can mix preset with overrides:
+```json
+{ "preset": "compact", "includeDefaultValues": true }
+```
+
+---
+
+### `parse_unity_prefab` *(deprecated)*
+Alias for `parse_unity_file`. Still works for backward compatibility.
+
+---
+
+## Client Setup
+
+All clients use the same MCP server binary. Replace `/path/to/unity-prefab-parser-mcp` with your actual clone path.
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "unity-prefab-parser": {
+      "command": "node",
+      "args": ["/path/to/unity-prefab-parser-mcp/dist/index.js"]
+    }
+  }
+}
+```
 
 ### OpenCode
 
@@ -55,146 +163,112 @@ Add to your `opencode.json`:
   "mcp": {
     "unity-parser": {
       "type": "local",
-      "command": ["node", "/path/to/unity-prefab-parser/dist/index.js"],
+      "command": ["node", "/path/to/unity-prefab-parser-mcp/dist/index.js"],
       "enabled": true
     }
   }
 }
 ```
 
-### VS Code (with MCP extension)
+**OpenCode users:** register the bundled skill for guided workflow and slash commands:
 
-Add to your VS Code settings or MCP config:
+```json
+{
+  "skills": {
+    "unity-asset-workflow": {
+      "path": "/path/to/unity-prefab-parser-mcp/skills/unity-asset-workflow/SKILL.md"
+    }
+  }
+}
+```
+
+Slash commands available after registering the skill:
+- `/init-unity [path]` — initialize project cache
+- `/browse-unity [path]` — browse project tree
+- `/list-assets [path] [type] [search]` — list assets
+- `/parse-asset [path]` — parse with compact preset
+
+### VS Code (GitHub Copilot / MCP extension)
+
+Add to `.vscode/mcp.json` in your workspace, or to VS Code user settings:
 
 ```json
 {
   "mcpServers": {
     "unity-prefab-parser": {
       "command": "node",
-      "args": ["/path/to/unity-prefab-parser/dist/index.js"]
+      "args": ["/path/to/unity-prefab-parser-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-### Google Gemini / AI Studio
+The `.github/copilot-instructions.md` bundled in this repo is auto-read by Copilot when the repo is open — no extra config needed for workflow guidance.
 
-For Gemini API with MCP support, configure the server:
+### Cursor / Windsurf
+
+Add to your MCP settings (Settings → MCP → Add Server):
 
 ```json
 {
-  "mcpServers": {
-    "unity-prefab-parser": {
-      "command": "node",
-      "args": ["/path/to/unity-prefab-parser/dist/index.js"]
-    }
+  "unity-prefab-parser": {
+    "command": "node",
+    "args": ["/path/to/unity-prefab-parser-mcp/dist/index.js"]
   }
 }
 ```
 
-### Claude Desktop
+### Codex / Claude Code (CLI agents)
 
-Add to your `claude_desktop_config.json`:
+The `AGENTS.md` file bundled in this repo is auto-read by Codex and Claude Code when they run in the project directory — no extra config needed. They will follow the init → browse → list → parse workflow automatically.
 
-```json
-{
-  "mcpServers": {
-    "unity-prefab-parser": {
-      "command": "node",
-      "args": ["/path/to/unity-prefab-parser/dist/index.js"]
-    }
-  }
-}
-```
+---
 
-## Tool: parse_unity_file
+## Unity Serialization Requirement
 
-Parse a Unity text-serialized prefab, scene, or asset file and extract Inspector-visible component data.
+This server requires Unity's **text serialization** format. If a file is binary, the server will reject it with a clear error.
 
-**Input:**
-```json
-{
-  "filePath": "/path/to/your/file.prefab",
-  "config": {
-    "preset": "compact"
-  }
-}
-```
+Enable text serialization: **Edit → Project Settings → Editor → Asset Serialization → Mode = Force Text**
 
-> Backward compatibility: the deprecated alias `parse_unity_prefab` is still registered for older clients.
+- [Unity Editor Manager docs](https://docs.unity3d.com/Manual/class-EditorManager.html)
+- [UnityYAML docs](https://docs.unity3d.com/Manual/UnityYAML.html)
 
-## Presets
-
-### Minimal
-Absolute minimum data for quick overview:
-- 5 max array elements
-- Excludes Transform component
-- No asset type comments
-- No default values or null references
-
-### Standard
-Balanced output with full details:
-- 20 max array elements
-- Full asset name resolution
-- Reference resolution enabled
-- Standard YAML list format for hierarchy
-
-### Compact (Recommended)
-Optimized for LLMs with maximum token savings:
-- Tree hierarchy with Unicode connectors
-- Field name abbreviations (`localPosition` → `lPos`)
-- Inline metadata for non-default values
-- Boolean conversion (`1` → `true`)
-- LayerMask bitmasks to layer arrays
-- Omits default transforms, enabled states, offsets
-- Short reference syntax (`@GameObjectName`)
-- **40-50% additional savings** vs standard mode
+---
 
 ## Example Output
 
-### Regular Prefab (Compact Mode)
+### Regular Prefab (compact mode)
 
-**Before (Raw Unity YAML - ~25,000 tokens):**
-```yaml
---- !u!114 &5264680121762722832
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 5765943547154460588}
-  m_Enabled: 1
-  ...
-```
-
-**After (Compact Mode - ~2,000 tokens):**
 ```yaml
 prefab_name: BatPF
 
 hierarchy: |
   BatPF (t: Player, l: Layer28)
-  ├── Data
-  ├── AI State
-  └── View
-      ├── Geometry
-      └── Shadow (a: false)
+  ├── Geometry
+  └── Data
 
 components:
   BatPF:
-    CircleCollider2D: {trigger: true, radius: 0.75}
-    Rigidbody2D: {mass: 3}
-    Character:
-      CharacterType: 1
-      UseDefaultMecanim: true
-  View:
-    SpriteRenderer:
-      sprite: @bat_sprite_0
-      sOrder: 5
+    Transform:
+      lPos: (27.13, -6.38, 0)
+    Rigidbody2D:
+      mass: 3
+      linearDrag: 5
+      angularDrag: 6
+      gravity: 0
+      bodyType: 0
+      sleepingMode: 1
+    CircleCollider2D: {trigger: true, radius: 0.5}
+  Data:
+    EntityData:
+      _entityName: Bat
+      _walkSpeed: 1.5
+      _attack: 10
+      _defense: 2
+      _isAlive: true
 ```
 
-**Token savings: ~92% reduction** (25K → 2K tokens)
-
-### Prefab Variant (Compact Mode)
+### Prefab Variant (compact mode)
 
 Variants show only modifications from the base prefab:
 
@@ -220,146 +294,110 @@ components:
     # CircleCollider2D  # -
 ```
 
-**Variant Markers:**
+**Variant markers:**
 | Marker | Meaning |
 |--------|---------|
-| `# $` | Modified (property changed from base) |
-| `# +` | Added (new GameObject or component) |
-| `# -` | Removed (component removed from base) |
+| `# $` | Modified from base |
+| `# +` | Added (new component or GameObject) |
+| `# -` | Removed from base |
 
-## Tree Hierarchy Format
+---
 
-In compact mode, the hierarchy uses a visual tree format:
+## Token Cost Reference
 
-```yaml
-hierarchy: |
-  RootObject (t: Player, l: UI)
-  ├── Child1
-  ├── Child2 (a: false)
-  │   ├── GrandChild1
-  │   └── GrandChild2
-  └── Child3
-```
+| Operation | Approx tokens |
+|---|---|
+| `init_unity_project` | 0 (disk only) |
+| `browse_unity_project` | ~200–500 |
+| `list_unity_assets` (50 files) | ~800 |
+| `parse_unity_file` compact | ~150–500 |
+| `parse_unity_file` standard | ~300–1,000 |
+| Raw Unity YAML (same file) | ~5,000–50,000 |
 
-**Inline Metadata** (only shown when non-default):
-- `t: TagName` - GameObject tag (omitted if "Untagged")
-- `l: LayerName` - Layer name (omitted if "Default")
-- `a: false` - Active state (omitted if true)
+---
 
-**Unity Layer Names:**
-| Layer | Name |
-|-------|------|
-| 0 | Default |
-| 1 | TransparentFX |
-| 2 | Ignore Raycast |
-| 4 | Water |
-| 5 | UI |
-| 8+ | Layer{N} |
-
-## Configuration Options
+## Configuration Reference
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `preset` | `"minimal"` \| `"standard"` \| `"compact"` | - | Use a preset configuration |
-| `resolveAssetNames` | boolean | true | Resolve GUIDs to asset names |
-| `showAssetTypes` | boolean | true | Show asset type as comment |
-| `arrayMaxElements` | number | 20 | Maximum array elements before summarizing |
-| `nestedObjectDepth` | number | 4 | Maximum depth for nested objects |
-| `includeTransform` | boolean | true | Include Transform components |
-| `includeDisabledObjects` | boolean | true | Include disabled GameObjects |
-| `includeDefaultValues` | boolean | false | Include properties with default values |
-| `includeNullReferences` | boolean | false | Include null/empty references |
-| `includeHierarchy` | boolean | true | Include hierarchy section |
-| `componentWhitelist` | string[] | [] | Only include these component types |
-| `componentBlacklist` | string[] | [] | Exclude these component types |
-| `useBooleans` | boolean | false | Convert 0/1 to true/false |
-| `convertBitmasks` | boolean | false | Convert LayerMask to layer arrays |
-| `useTreeHierarchy` | boolean | false | Use tree format for hierarchy |
-| `abbreviateFieldNames` | boolean | false | Shorten field names (lPos, lRot, etc.) |
-| `omitDefaultTransforms` | boolean | false | Omit default position/rotation/scale |
-| `useShortRefs` | boolean | false | Use `@Name` instead of `<Type:Name>` |
-| `useParenVectors` | boolean | false | Use `(x, y, z)` instead of `{x, y, z}` |
-| `inlineSimpleComponents` | boolean | false | Inline components with 1-2 fields |
-| `showVariantMarkers` | boolean | true | Show `# $`, `# +`, `# -` markers |
+| `preset` | `"minimal"` \| `"standard"` \| `"compact"` | — | Use a preset |
+| `resolveAssetNames` | boolean | `true` | Resolve GUIDs to asset names |
+| `showAssetTypes` | boolean | `true` | Show asset type as comment |
+| `arrayMaxElements` | number | `20` | Max array elements before summarizing |
+| `nestedObjectDepth` | number | `4` | Max depth for nested objects |
+| `includeTransform` | boolean | `true` | Include Transform components |
+| `includeDisabledObjects` | boolean | `true` | Include disabled GameObjects |
+| `includeDefaultValues` | boolean | `false` | Include properties with default values |
+| `includeNullReferences` | boolean | `false` | Include null/empty references |
+| `includeHierarchy` | boolean | `true` | Include hierarchy section |
+| `componentWhitelist` | string[] | `[]` | Only include these component types |
+| `componentBlacklist` | string[] | `[]` | Exclude these component types |
+| `useBooleans` | boolean | `false` | Convert 0/1 to true/false |
+| `convertBitmasks` | boolean | `false` | Convert LayerMask to layer arrays |
+| `useTreeHierarchy` | boolean | `false` | Use tree format for hierarchy |
+| `abbreviateFieldNames` | boolean | `false` | Shorten field names (`lPos`, `lRot`) |
+| `omitDefaultTransforms` | boolean | `false` | Omit default position/rotation/scale |
+| `useShortRefs` | boolean | `false` | Use `@Name` instead of `<Type:Name>` |
+| `useParenVectors` | boolean | `false` | Use `(x, y, z)` instead of `{x, y, z}` |
+| `inlineSimpleComponents` | boolean | `false` | Inline components with 1–2 fields |
+| `showVariantMarkers` | boolean | `true` | Show `# $`, `# +`, `# -` markers |
 
-## Compact Mode Optimizations
-
-| Optimization | Before | After |
-|--------------|--------|-------|
-| Tree hierarchy | YAML list | Visual tree with `├──` `└──` |
-| Field abbreviations | `localPosition` | `lPos` |
-| Vector notation | `{x: 1, y: 2, z: 3}` | `(1, 2, 3)` |
-| Color notation | `{r: 1, g: 0, b: 0, a: 1}` | `rgba(1, 0, 0, 1)` |
-| Boolean conversion | `enabled: 1` | `enabled: true` |
-| Bitmask to layers | `{m_Bits: 67108864}` | `[26]` |
-| Reference syntax | `<GameObject:Player>` | `@Player` |
-| Default transforms | `lPos: (0, 0, 0)` | *(omitted)* |
-| Enabled true | `enabled: true` | *(omitted)* |
-| Empty events | `{m_PersistentCalls: ...}` | `[]` |
-| Simple components | Multi-line | `{field: value}` |
-
-## Project Structure
-
-```
-unity-prefab-parser/
-├── src/
-│   ├── index.ts        # MCP server entry point
-│   ├── parser.ts       # Unity YAML parsing
-│   ├── resolver.ts     # Reference resolution
-│   ├── components.ts   # Component field filters
-│   ├── hierarchy.ts    # GameObject tree builder
-│   ├── formatter.ts    # YAML output formatter
-│   ├── config.ts       # Configuration system
-│   ├── cache.ts        # Meta file cache
-│   └── variant.ts      # Prefab variant detection
-├── test/
-│   └── parser.test.ts  # Test suite (96 tests)
-├── package.json
-└── tsconfig.json
-```
-
-## How It Works
-
-1. **Parse Unity YAML**: Handles Unity's custom YAML format with `!u!` tags
-2. **Detect Prefab Type**: Identifies regular prefabs vs variants
-3. **Build FileID Map**: Creates lookup tables for GameObjects, Transforms, and Components
-4. **Auto-detect Project Root**: Finds Unity project root by looking for `Assets/` folder
-5. **Build GUID Cache**: Scans `.meta` files to create GUID → asset name mapping
-6. **Reconstruct Hierarchy**: Builds GameObject tree from Transform relationships
-7. **Filter & Rename Fields**: Applies component-specific filters and abbreviations
-8. **Resolve References**: Converts fileIDs and GUIDs to readable names
-9. **Extract Variant Modifications**: For variants, extract only changed properties
-10. **Format Output**: Generates clean YAML with tree hierarchy and markers
+---
 
 ## Supported Components
 
 Built-in field filters for:
 - Transform, RectTransform
 - Rigidbody, Rigidbody2D
-- All Collider types (Box, Sphere, Capsule, Circle, Polygon, etc.)
-- SpriteRenderer, MeshRenderer, SkinnedMeshRenderer
+- All Collider types (Box, Sphere, Capsule, Circle, Polygon, Mesh)
+- SpriteRenderer, MeshRenderer, SkinnedMeshRenderer, MeshFilter
 - Animator, Animation
 - AudioSource, Camera, Light
 - Canvas, CanvasScaler, GraphicRaycaster
-- UI components (Image, Text, Button, etc.)
-- ParticleSystem, TrailRenderer, LineRenderer
-- MonoBehaviour (custom scripts - all serialized fields)
+- UI: Image, Text, TextMeshProUGUI, Button
+- ParticleSystem, ParticleSystemRenderer, TrailRenderer, LineRenderer
+- MonoBehaviour (custom scripts — all serialized fields shown)
+
+---
+
+## Project Structure
+
+```
+unity-prefab-parser-mcp/
+├── src/
+│   ├── index.ts        # MCP server, all tool definitions
+│   ├── parser.ts       # Unity YAML parsing
+│   ├── resolver.ts     # Reference and value resolution
+│   ├── components.ts   # Component field filters and renames
+│   ├── hierarchy.ts    # GameObject tree builder
+│   ├── formatter.ts    # YAML output formatter
+│   ├── config.ts       # Configuration and presets
+│   ├── cache.ts        # Meta file GUID cache
+│   └── variant.ts      # Prefab variant detection
+├── skills/
+│   └── unity-asset-workflow/
+│       └── SKILL.md    # OpenCode skill (workflow + slash commands)
+├── test/
+│   └── parser.test.ts  # Test suite (103 tests)
+├── AGENTS.md           # Auto-read by Codex and Claude Code
+├── .github/
+│   └── copilot-instructions.md  # Auto-read by GitHub Copilot
+├── package.json
+└── tsconfig.json
+```
+
+---
 
 ## Development
 
 ```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Run tests
-npm test
-
-# Watch mode
-npm run dev
+npm install       # install dependencies
+npm run build     # compile TypeScript
+npm test          # run test suite (103 tests)
+npm run dev       # run with tsx (no build needed)
 ```
+
+---
 
 ## License
 
