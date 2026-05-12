@@ -37,3 +37,15 @@ This MCP server parses Unity text-serialized assets (.prefab, .unity, .asset) in
 - `compact` — 92% token reduction, best for analysis
 - `standard` — balanced, shows asset type comments
 - `minimal` — structural overview only
+
+## Available Skills
+
+Load the appropriate skill when the task matches:
+
+| Skill | When to use |
+|---|---|
+| `unity-asset-workflow` | General workflow: init, browse, list, parse |
+| `unity-diff-workflow` | Comparing prefabs, variants, or scenes across versions |
+| `unity-scene-workflow` | Navigating large `.unity` scenes token-efficiently |
+
+Skills are in `skills/<skill-name>/SKILL.md` in this repo.

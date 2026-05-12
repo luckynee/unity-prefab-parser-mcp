@@ -7,4 +7,12 @@ When working with Unity assets using this MCP:
 3. Use `parse_unity_file` with `{ "preset": "compact" }` for token-efficient output
 4. For comparisons, parse both files then diff the YAML output
 
+## Available Skills
+
+| Task | Skill file |
+|---|---|
+| General workflow (init, browse, parse) | `skills/unity-asset-workflow/SKILL.md` |
+| Comparing prefabs, variants, scenes | `skills/unity-diff-workflow/SKILL.md` |
+| Navigating large scenes efficiently | `skills/unity-scene-workflow/SKILL.md` |
+
 See AGENTS.md for full tool reference.
