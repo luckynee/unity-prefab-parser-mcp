@@ -170,23 +170,30 @@ Add to your `opencode.json`:
 }
 ```
 
-**OpenCode users:** register the bundled skill for guided workflow and slash commands:
+**OpenCode users:** copy the bundled skills to your OpenCode skills directory for guided workflow and slash commands:
 
-```json
-{
-  "skills": {
-    "unity-asset-workflow": {
-      "path": "/path/to/unity-prefab-parser-mcp/skills/unity-asset-workflow/SKILL.md"
-    }
-  }
-}
+```bash
+# Copy all three Unity skills to OpenCode
+cp -r /path/to/unity-prefab-parser-mcp/skills/unity-asset-workflow ~/.config/opencode/skills/
+cp -r /path/to/unity-prefab-parser-mcp/skills/unity-diff-workflow ~/.config/opencode/skills/
+cp -r /path/to/unity-prefab-parser-mcp/skills/unity-scene-workflow ~/.config/opencode/skills/
 ```
 
-Slash commands available after registering the skill:
+Then restart OpenCode. The skills will appear in `/skills`.
+
+| Skill | Purpose |
+|---|---|
+| `unity-asset-workflow` | General workflow — init, browse, list, parse |
+| `unity-diff-workflow` | Compare prefabs, variants, scenes across versions |
+| `unity-scene-workflow` | Navigate large `.unity` scenes token-efficiently |
+
+Slash commands available after installing:
 - `/init-unity [path]` — initialize project cache
 - `/browse-unity [path]` — browse project tree
 - `/list-assets [path] [type] [search]` — list assets
 - `/parse-asset [path]` — parse with compact preset
+- `/diff-prefabs [pathA] [pathB]` — compare two prefabs
+- `/scene-overview [path]` — get hierarchy-only view of a scene
 
 ### VS Code (GitHub Copilot / MCP extension)
 
@@ -375,8 +382,12 @@ unity-prefab-parser-mcp/
 │   ├── cache.ts        # Meta file GUID cache
 │   └── variant.ts      # Prefab variant detection
 ├── skills/
-│   └── unity-asset-workflow/
-│       └── SKILL.md    # OpenCode skill (workflow + slash commands)
+│   ├── unity-asset-workflow/
+│   │   └── SKILL.md    # General workflow (init, browse, list, parse)
+│   ├── unity-diff-workflow/
+│   │   └── SKILL.md    # Compare prefabs, variants, scenes
+│   └── unity-scene-workflow/
+│       └── SKILL.md    # Navigate large scenes token-efficiently
 ├── test/
 │   └── parser.test.ts  # Test suite (103 tests)
 ├── AGENTS.md           # Auto-read by Codex and Claude Code
