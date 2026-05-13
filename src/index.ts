@@ -153,6 +153,80 @@ async function parsePrefab(filePath: string, config: ParseConfig): Promise<strin
           const basePath = assetEntry.path === 'Built-in' ? '' : path.join(projectRoot, 'Assets', assetEntry.path);
           const baseDocs = await parseUnityYAML(basePath);
           const baseMap = buildFileIdMap(baseDocs);
+
+          // Resolve stripped objects that belong to nested prefabs inside the base prefab.
+          // A stripped doc has m_CorrespondingSourceObject.fileID pointing into a nested prefab,
+          // and m_PrefabInstance pointing to the PrefabInstance block that owns it.
+          // We load each nested prefab (1 level deep) and copy the resolved entry into baseMap
+          // under the stripped doc's own fileID so getVariantTargetInfo can find it by name.
+          try {
+            // Collect nested prefab guids from PrefabInstance blocks in the base prefab
+            const nestedGuids = new Map<string, string>(); // prefabInstanceFileId → nestedGuid
+            for (const doc of baseDocs) {
+              if (doc.className === 'PrefabInstance') {
+                const srcPrefab = (doc.data as Record<string, unknown>).m_SourcePrefab as
+                  | { guid?: string }
+                  | undefined;
+                if (srcPrefab?.guid) {
+                  nestedGuids.set(doc.fileId, srcPrefab.guid);
+                }
+              }
+            }
+
+            // Build a fileId map per nested prefab guid (load once, reuse)
+            const nestedMaps = new Map<string, FileIdMap>();
+            for (const nestedGuid of new Set(nestedGuids.values())) {
+              const nestedEntry = assetCache[nestedGuid];
+              if (!nestedEntry?.path || nestedEntry.path === 'Built-in') continue;
+              try {
+                const nestedPath = path.join(projectRoot, 'Assets', nestedEntry.path);
+                const nestedDocs = await parseUnityYAML(nestedPath);
+                nestedMaps.set(nestedGuid, buildFileIdMap(nestedDocs));
+              } catch {
+                // Nested prefab unreadable — skip
+              }
+            }
+
+            // For each stripped doc in the base prefab, resolve via the nested map
+            for (const doc of baseDocs) {
+              if (!doc.stripped) continue;
+              const data = doc.data as Record<string, unknown>;
+              const srcObj = data.m_CorrespondingSourceObject as
+                | { fileID?: string | number; guid?: string }
+                | undefined;
+              const prefabInstanceRef = data.m_PrefabInstance as
+                | { fileID?: string | number }
+                | undefined;
+              if (!srcObj?.fileID) continue;
+
+              const srcFileId = String(srcObj.fileID);
+              if (srcFileId === '0') continue;
+
+              // Determine which nested prefab this stripped object belongs to
+              const prefabInstanceFileId = prefabInstanceRef?.fileID
+                ? String(prefabInstanceRef.fileID)
+                : undefined;
+              const nestedGuid = prefabInstanceFileId
+                ? nestedGuids.get(prefabInstanceFileId)
+                : srcObj.guid;
+              if (!nestedGuid) continue;
+
+              const nestedMap = nestedMaps.get(nestedGuid);
+              if (!nestedMap) continue;
+
+              // Copy the resolved entry from the nested map into baseMap under the stripped fileID
+              if (nestedMap.gameObjects.has(srcFileId)) {
+                baseMap.gameObjects.set(doc.fileId, nestedMap.gameObjects.get(srcFileId)!);
+              } else if (nestedMap.transforms.has(srcFileId)) {
+                baseMap.transforms.set(doc.fileId, nestedMap.transforms.get(srcFileId)!);
+              } else if (nestedMap.components.has(srcFileId)) {
+                baseMap.components.set(doc.fileId, nestedMap.components.get(srcFileId)!);
+              }
+            }
+          } catch {
+            // Nested prefab resolution failed — continue with unresolved stripped objects
+          }
+
           const baseHierarchy = buildHierarchy(baseMap, true);
           const baseDisplay = buildGameObjectDisplayMap(baseHierarchy);
           baseFileIdMaps.set(guid, baseMap);
