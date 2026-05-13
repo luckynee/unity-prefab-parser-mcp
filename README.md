@@ -1,6 +1,8 @@
 # Unity Prefab Parser MCP Server
 
-An MCP (Model Context Protocol) server that parses Unity **text-serialized** `.prefab`, `.unity`, and `.asset` files and outputs only Inspector-visible data in a clean, hierarchical YAML format — reducing token usage by up to 92%.
+An MCP (Model Context Protocol) server that parses Unity **text-serialized** `.prefab`, `.unity`, and `.asset` files and outputs only Inspector-visible data in a clean, hierarchical YAML format — reducing token usage by up to 96%.
+
+Supports regular prefabs, **prefab variants** (shows overridden values grouped by GameObject and component), and scene files.
 
 Works with **any MCP-compatible AI client**: Claude Desktop, OpenCode, VS Code Copilot, Cursor, Windsurf, Codex, and more.
 
@@ -118,7 +120,7 @@ Parse a Unity text-serialized file and extract Inspector-visible component data 
 
 | Preset | Token reduction | Best for |
 |--------|----------------|----------|
-| `compact` | ~92% | LLM analysis, comparisons |
+| `compact` | ~93–96% | LLM analysis, comparisons |
 | `standard` | ~84% | When you need GUID comments |
 | `minimal` | ~95% | Quick structural overview |
 
@@ -280,28 +282,39 @@ components:
 
 ### Prefab Variant (compact mode)
 
-Variants show only modifications from the base prefab:
+Variants show `variant_of` and only the modifications from the base prefab, grouped by GameObject and actual component/script type:
 
 ```yaml
-prefab_name: Interactable Animal
-variant_of: Base Animal
+prefab_name: Buck
+variant_of: Buck Base
 
 hierarchy: |
-  Base Animal  # $
-  ├── View  # $ +
-  └── NewChild  # +
+  Buck Base  # $
+  ├── AI  # $
+  ├── Hitable Geometry  # $
+  └── Unknown  # $
 
 components:
-  Base Animal:
+  Buck Base:
     Transform:  # $
-      lPos: (0, 0.14, 0)  # $
-  View:
-    SpriteRenderer:  # $
-      color: rgba(1, 0, 0, 1)  # $
-    BoxCollider2D:  # +
-      trigger: true
-      size: (1, 1)
-    # CircleCollider2D  # -
+      lPos: (-42.633396, -215.17801, 0)  # $
+    GameObject:  # $
+      name: Buck  # $
+    Seeker:  # $
+      tagPenalties.array.data: 10000  # $
+  AI:
+    AIBrain:  # $
+      states.array.size: 7  # $
+      states.array.data.stateName: Exit Scene  # $
+      states.array.data.transitions.array.array.data.trueState: Flee  # $
+  Hitable Geometry:
+    GameObject:  # $
+      layer: 20  # $
+  Unknown:
+    AggressiveAnimalData:  # $
+      _defense: 3  # $
+    Animator:  # $
+      ctrl: Buck Anim Controller  # $
 ```
 
 **Variant markers:**
@@ -311,17 +324,28 @@ components:
 | `# +` | Added (new component or GameObject) |
 | `# -` | Removed from base |
 
+> **Note:** `Unknown` GameObjects are modification targets that live 2+ levels deep in nested prefab chains — their names can't be resolved without recursive loading.
+
 ---
 
 ## Token Cost Reference
+
+Real measurements on production prefabs:
+
+| File | Raw YAML | Parsed compact | Reduction |
+|------|----------|----------------|-----------|
+| Buck.prefab (variant, 38KB) | ~9,600 tokens | ~400 tokens | **96%** |
+| Buck Base.prefab (full, 73KB) | ~18,000 tokens | ~1,200 tokens | **93%** |
+
+Operation costs:
 
 | Operation | Approx tokens |
 |---|---|
 | `init_unity_project` | 0 (disk only) |
 | `browse_unity_project` | ~200–500 |
 | `list_unity_assets` (50 files) | ~800 |
-| `parse_unity_file` compact | ~150–500 |
-| `parse_unity_file` standard | ~300–1,000 |
+| `parse_unity_file` compact | ~150–1,200 |
+| `parse_unity_file` standard | ~300–2,000 |
 | Raw Unity YAML (same file) | ~5,000–50,000 |
 
 ---
