@@ -113,29 +113,41 @@ export function detectPrefabVariant(
     return null;
   }
   
-  // Find the root variant instance
-  // The root variant is the one that:
-  // 1. Has a modification setting m_Name on the root GameObject (usually matches file name), OR
-  // 2. Has the most modifications (fallback heuristic)
-  let rootInstance = prefabInstances[0];
+  // Find the root variant instance by checking m_TransformParent.fileID === 0.
+  // A true prefab variant has exactly one PrefabInstance whose root transform has
+  // no parent (fileID 0). A regular prefab with nested sub-prefabs has all
+  // PrefabInstances parented to something inside the prefab (non-zero fileID).
+  const rootInstances: PrefabInstanceInfo[] = [];
   
-  for (const instance of prefabInstances) {
-    // Check if this instance modifies the root transform (m_Father = {fileID: 0})
-    const hasRootTransformMod = instance.modifications.some(mod => 
-      mod.propertyPath === 'm_Father' || 
-      mod.propertyPath === 'm_TransformParent'
-    );
-    
-    // Check if this instance sets a root-level m_Name
-    const setsRootName = instance.modifications.some(mod =>
-      mod.propertyPath === 'm_Name' && mod.value !== instance.sourcePrefabName
-    );
-    
-    // The root variant typically has the most modifications (it's the base)
-    if (hasRootTransformMod || setsRootName || 
-        instance.modifications.length > rootInstance.modifications.length) {
-      rootInstance = instance;
+  for (const doc of documents) {
+    if (doc.className !== 'PrefabInstance') continue;
+    const data = doc.data as Record<string, unknown>;
+    const modification = data.m_Modification as Record<string, unknown> | undefined;
+    if (!modification) continue;
+    const transformParent = modification.m_TransformParent as { fileID?: number | string } | undefined;
+    if (!transformParent) continue;
+    const fileId = transformParent.fileID;
+    if (fileId === 0 || fileId === '0') {
+      // This PrefabInstance is the root — find the matching PrefabInstanceInfo
+      const match = prefabInstances.find(pi => pi.fileId === doc.fileId);
+      if (match) rootInstances.push(match);
     }
+  }
+  
+  let rootInstance: PrefabInstanceInfo;
+  
+  if (rootInstances.length === 1) {
+    // Exactly one root instance — this is a true prefab variant
+    rootInstance = rootInstances[0];
+  } else if (rootInstances.length === 0) {
+    // No instance has a zero-parent transform — this is a regular prefab
+    // with nested sub-prefabs, not a variant. Do not treat it as a variant.
+    return null;
+  } else {
+    // Multiple root instances (unusual) — fall back to most-modifications heuristic
+    rootInstance = rootInstances.reduce((best, inst) =>
+      inst.modifications.length > best.modifications.length ? inst : best
+    , rootInstances[0]);
   }
   
   const asset = assetCache[rootInstance.sourcePrefabGuid];

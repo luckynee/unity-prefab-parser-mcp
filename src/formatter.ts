@@ -191,7 +191,9 @@ export function formatYAMLWithComments(
   lines.push('');
   
   // Hierarchy (can be omitted with includeHierarchy: false)
-  if (config.includeHierarchy && data.hierarchy.length > 0) {
+  // Skip the regular hierarchy block for variants in tree format — the variant
+  // block below (buildVariantTree) will emit its own hierarchy: section instead.
+  if (config.includeHierarchy && data.hierarchy.length > 0 && !(data.variant_of && config.useTreeHierarchy)) {
     if (config.useTreeHierarchy) {
       // Tree format (Linux-style)
       lines.push('hierarchy: |');
