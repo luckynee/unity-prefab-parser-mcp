@@ -137,9 +137,34 @@ async function parsePrefab(filePath: string, config: ParseConfig): Promise<strin
   // 10. Add variant information if applicable
   if (variantInfo) {
     parsedPrefab.variant_of = variantInfo.basePrefabName;
-    
+
+    // Load base prefab(s) so modifications can be resolved against their fileIDs.
+    // Each PrefabInstance in the variant may reference a different source prefab (nested variants),
+    // so we build one map per unique guid.
+    const baseFileIdMaps = new Map<string, FileIdMap>();
+    const baseDisplayMaps = new Map<string, Map<string, string>>();
+
+    if (projectRoot) {
+      const uniqueGuids = new Set(variantInfo.prefabInstances.map(i => i.sourcePrefabGuid));
+      for (const guid of uniqueGuids) {
+        const assetEntry = assetCache[guid];
+        if (!assetEntry?.path) continue;
+        try {
+          const basePath = assetEntry.path === 'Built-in' ? '' : path.join(projectRoot, 'Assets', assetEntry.path);
+          const baseDocs = await parseUnityYAML(basePath);
+          const baseMap = buildFileIdMap(baseDocs);
+          const baseHierarchy = buildHierarchy(baseMap, true);
+          const baseDisplay = buildGameObjectDisplayMap(baseHierarchy);
+          baseFileIdMaps.set(guid, baseMap);
+          baseDisplayMaps.set(guid, baseDisplay);
+        } catch {
+          // Base prefab not readable — fall back to existing behaviour for this guid
+        }
+      }
+    }
+
     // Process modifications from all prefab instances
-    const allModifications = processVariantModifications(variantInfo, fileIdMap, assetCache, config, displayMap);
+    const allModifications = processVariantModifications(variantInfo, fileIdMap, assetCache, config, displayMap, baseFileIdMaps, baseDisplayMaps);
     if (Object.keys(allModifications).length > 0) {
       parsedPrefab.modifications = allModifications;
     }
@@ -190,7 +215,9 @@ function processVariantModifications(
   fileIdMap: FileIdMap,
   assetCache: MetaFileCache,
   config: ParseConfig,
-  displayMap: Map<string, string>
+  displayMap: Map<string, string>,
+  baseFileIdMaps: Map<string, FileIdMap> = new Map(),
+  baseDisplayMaps: Map<string, Map<string, string>> = new Map()
 ): Record<string, Record<string, Record<string, unknown>>> {
   const result: Record<string, Record<string, Record<string, unknown>>> = {};
 
@@ -200,11 +227,35 @@ function processVariantModifications(
     
     // Merge vector properties
     const merged = mergeVectorProperties(filtered);
+
+    // Build a guid→targetFileId lookup from the original (pre-merge) modifications
+    // so we can pick the right base map per entry.
+    const targetKeyToGuid = new Map<string, string>();
+    for (const mod of filtered) {
+      const key = `${mod.targetGuid}:${mod.targetFileId}`;
+      if (mod.targetGuid) targetKeyToGuid.set(key, mod.targetGuid);
+    }
     
     // Process all modifications under the base prefab name
     for (const [targetKey, properties] of merged) {
       const targetFileId = targetKey.includes(':') ? targetKey.split(':').pop() || '' : targetKey;
-      const targetInfo = getVariantTargetInfo(targetFileId, fileIdMap, displayMap, variantInfo.basePrefabName);
+
+      // Try variant's own fileIdMap first (covers added components that live in the variant).
+      // If not found, fall back to the base prefab's map for this guid.
+      let targetInfo = getVariantTargetInfo(targetFileId, fileIdMap, displayMap, '');
+      if (!targetInfo.componentType && (targetInfo.gameObjectKey === '' || targetInfo.gameObjectKey === 'Unknown')) {
+        const guid = targetKeyToGuid.get(targetKey) || instance.sourcePrefabGuid;
+        const baseMap = baseFileIdMaps.get(guid);
+        const baseDisplay = baseDisplayMaps.get(guid);
+        if (baseMap && baseDisplay) {
+          const baseName = assetCache[guid]?.name || variantInfo.basePrefabName;
+          targetInfo = getVariantTargetInfo(targetFileId, baseMap, baseDisplay, baseName);
+        }
+      }
+      // Final fallback: use base prefab name
+      if (!targetInfo.gameObjectKey) {
+        targetInfo = { gameObjectKey: variantInfo.basePrefabName || 'Unknown' };
+      }
 
       if (!result[targetInfo.gameObjectKey]) {
         result[targetInfo.gameObjectKey] = {};

@@ -118,7 +118,7 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
   
   // Split into documents by the Unity document separator pattern
   // Format: --- !u!<classId> &<fileId>
-  const docRegex = /^---\s*!u!(\d+)\s*&(-?\d+)\s*$/gm;
+  const docRegex = /^---\s*!u!(\d+)\s*&(-?\d+)(?:\s+stripped)?\s*$/gm;
   const docStarts: { index: number; classId: string; fileId: string }[] = [];
   
   let match: RegExpExecArray | null;

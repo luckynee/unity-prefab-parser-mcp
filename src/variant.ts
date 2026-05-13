@@ -177,7 +177,7 @@ function parseModifications(
     const objectRef = mod.objectReference as { fileID?: number; guid?: string } | undefined;
     
     result.push({
-      targetFileId: String(target.fileID || 0),
+      targetFileId: String(target.fileID || 0).replace(/^"|"$/g, ''),
       targetGuid: target.guid || '',
       propertyPath: (mod.propertyPath as string) || '',
       value: mod.value,
