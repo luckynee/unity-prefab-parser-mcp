@@ -90,6 +90,7 @@ export interface ParsedDocument {
   fileId: string;
   className: string;
   data: Record<string, unknown>;
+  stripped?: boolean;
 }
 
 /**
@@ -118,8 +119,8 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
   
   // Split into documents by the Unity document separator pattern
   // Format: --- !u!<classId> &<fileId>
-  const docRegex = /^---\s*!u!(\d+)\s*&(-?\d+)(?:\s+stripped)?\s*$/gm;
-  const docStarts: { index: number; classId: string; fileId: string }[] = [];
+  const docRegex = /^---\s*!u!(\d+)\s*&(-?\d+)(\s+stripped)?\s*$/gm;
+  const docStarts: { index: number; classId: string; fileId: string; stripped: boolean }[] = [];
   
   let match: RegExpExecArray | null;
   while ((match = docRegex.exec(content)) !== null) {
@@ -127,6 +128,7 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
       index: match.index,
       classId: match[1],
       fileId: match[2],
+      stripped: match[3] !== undefined,
     });
   }
   
@@ -147,6 +149,7 @@ export function parseUnityYAMLContent(content: string): ParsedDocument[] {
         fileId: start.fileId,
         className,
         data,
+        stripped: start.stripped,
       });
     } catch (error) {
       // Skip malformed documents

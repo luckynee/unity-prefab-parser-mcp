@@ -242,14 +242,14 @@ function processVariantModifications(
 
       // Try variant's own fileIdMap first (covers added components that live in the variant).
       // If not found, fall back to the base prefab's map for this guid.
-      let targetInfo = getVariantTargetInfo(targetFileId, fileIdMap, displayMap, '');
+      let targetInfo = getVariantTargetInfo(targetFileId, fileIdMap, displayMap, '', assetCache);
       if (!targetInfo.componentType && (targetInfo.gameObjectKey === '' || targetInfo.gameObjectKey === 'Unknown')) {
         const guid = targetKeyToGuid.get(targetKey) || instance.sourcePrefabGuid;
         const baseMap = baseFileIdMaps.get(guid);
         const baseDisplay = baseDisplayMaps.get(guid);
         if (baseMap && baseDisplay) {
           const baseName = assetCache[guid]?.name || variantInfo.basePrefabName;
-          targetInfo = getVariantTargetInfo(targetFileId, baseMap, baseDisplay, baseName);
+          targetInfo = getVariantTargetInfo(targetFileId, baseMap, baseDisplay, baseName, assetCache);
         }
       }
       // Final fallback: use base prefab name
@@ -336,8 +336,21 @@ function inferComponentType(propertyPath: string): string {
       propertyPath.startsWith('m_TagString')) {
     return 'GameObject';
   }
-  
-  // Default to component name from path if available
+  if (propertyPath.startsWith('m_Materials') || propertyPath.startsWith('materials')) {
+    return 'Renderer';
+  }
+  if (propertyPath.startsWith('m_Controller') || propertyPath === 'ctrl' || propertyPath.startsWith('ctrl.')) {
+    return 'Animator';
+  }
+  if (propertyPath.startsWith('tagPenalties') || propertyPath.startsWith('m_tagPenalties')) {
+    return 'Seeker';
+  }
+  if (propertyPath === 'speed' || propertyPath.startsWith('speed.') ||
+      propertyPath.startsWith('maxSpeed') || propertyPath.startsWith('acceleration')) {
+    return 'AILerp';
+  }
+
+  // Default
   return 'Properties';
 }
 
@@ -1336,7 +1349,8 @@ function getVariantTargetInfo(
   targetFileId: string,
   fileIdMap: FileIdMap,
   displayMap: Map<string, string>,
-  fallbackName: string
+  fallbackName: string,
+  assetCache: MetaFileCache = {}
 ): { gameObjectKey: string; componentType?: string } {
   if (fileIdMap.gameObjects.has(targetFileId)) {
     const gameObject = fileIdMap.gameObjects.get(targetFileId)!;
@@ -1350,9 +1364,20 @@ function getVariantTargetInfo(
   if (componentInfo) {
     const ownerFileId = getOwningGameObjectFileId(targetFileId, fileIdMap);
 
+    // Resolve MonoBehaviour → script name
+    let componentType = componentInfo.type;
+    if (componentType === 'MonoBehaviour') {
+      const compData = fileIdMap.components.get(targetFileId)?.data;
+      const scriptRef = compData?.m_Script as { guid?: string } | undefined;
+      if (scriptRef?.guid) {
+        const scriptName = assetCache[scriptRef.guid]?.name;
+        if (scriptName) componentType = scriptName;
+      }
+    }
+
     return {
       gameObjectKey: getDisplayName(componentInfo.gameObjectName, ownerFileId, displayMap),
-      componentType: componentInfo.type,
+      componentType,
     };
   }
 

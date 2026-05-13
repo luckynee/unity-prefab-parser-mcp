@@ -48,7 +48,7 @@ export function buildFileIdMap(documents: ParsedDocument[]): FileIdMap {
         childrenFileIds: children?.map(c => String(c.fileID)).filter(id => id !== '0') || [],
       });
     } else if (doc.className !== 'PrefabInstance' && doc.className !== 'PrefabModification') {
-      // All other components
+      // All other components (including stripped objects from base prefab)
       const gameObjectRef = data.m_GameObject as { fileID: string | number } | undefined;
       
       const goFileId = gameObjectRef?.fileID;
@@ -58,6 +58,18 @@ export function buildFileIdMap(documents: ParsedDocument[]): FileIdMap {
           gameObjectFileId: String(goFileId),
           data: data,
         });
+      } else if (doc.stripped) {
+        // Stripped objects have m_CorrespondingSourceObject but no m_GameObject.
+        // Add them with whatever type info is available so modifications can be typed.
+        const sourceRef = data.m_CorrespondingSourceObject as { fileID: string | number } | undefined;
+        const sourceFileId = sourceRef?.fileID;
+        if (sourceFileId && sourceFileId !== 0 && sourceFileId !== '0') {
+          map.components.set(fileId, {
+            type: doc.className,
+            gameObjectFileId: String(sourceFileId),
+            data: data,
+          });
+        }
       }
     }
   }
