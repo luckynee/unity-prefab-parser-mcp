@@ -1209,6 +1209,7 @@ describe('Prefab Variant Detection', () => {
         data: {
           m_SourcePrefab: { fileID: 100100000, guid: 'abc123', type: 3 },
           m_Modification: {
+            m_TransformParent: { fileID: 0 },
             m_Modifications: [
               { target: { fileID: 456, guid: 'abc123' }, propertyPath: 'm_LocalPosition.x', value: '5', objectReference: { fileID: 0 } },
             ],
